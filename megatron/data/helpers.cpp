@@ -200,7 +200,7 @@ py::array build_mapping_impl(const py::array_t<int64_t> &docs_,
                              const uint64_t max_num_samples,
                              const int32_t max_seq_length,
                              const double short_seq_prob, const int32_t seed,
-                             const bool verbose, const int32_t min_num_sent) {
+                             const bool verbose, const int32_t min_num_sent, const bool sort_samples) {
   /* Build a mapping of (start-index, end-index, sequence-length) where
      start and end index are the indices of the sentences in the sample
      and sequence-length is the target sequence length.
@@ -356,7 +356,7 @@ py::array build_mapping_impl(const py::array_t<int64_t> &docs_,
                 const auto map_index_0 = 3 * map_index;
                 maps[map_index_0] = static_cast<DocIdx>(prev_start_index);
                 maps[map_index_0 + 1] = static_cast<DocIdx>(sent_index + 1);
-                maps[map_index_0 + 2] = static_cast<DocIdx>(target_seq_len);
+                maps[map_index_0 + 2] = static_cast<DocIdx>(seq_len); // why target seq len is used here?
               }
 
               // Update indices / counters.
@@ -394,18 +394,38 @@ py::array build_mapping_impl(const py::array_t<int64_t> &docs_,
 
   }  // for (int iteration=0; iteration < 2; ++iteration) {
 
-  // Shuffle.
-  // We need a 64 bit random number generator as we might have more
-  // than 2 billion samples.
-  std::mt19937_64 rand64_gen(seed + 1);
-  for (auto i = (num_samples - 1); i > 0; --i) {
-    const auto j = static_cast<int64_t>(rand64_gen() % (i + 1));
-    const auto i0 = 3 * i;
-    const auto j0 = 3 * j;
-    // Swap values.
-    swap(maps[i0], maps[j0]);
-    swap(maps[i0 + 1], maps[j0 + 1]);
-    swap(maps[i0 + 2], maps[j0 + 2]);
+  if (sort_samples) {
+    // Sort the dataset by sequence length
+    std::vector<std::tuple<DocIdx, DocIdx, DocIdx>> idx_maps;
+    for (int64_t i = 0; i < num_samples; ++i) {
+      idx_maps.push_back(std::make_tuple(maps[3 * i], maps[3 * i + 1],
+                                         maps[3 * i + 2]));
+    }
+    std::sort(idx_maps.begin(), idx_maps.end(),
+              [](const std::tuple<DocIdx, DocIdx, DocIdx> &a,
+                 const std::tuple<DocIdx, DocIdx, DocIdx> &b) {
+                return std::get<2>(a) < std::get<2>(b);
+              });
+    // Copy back to maps
+    for (int64_t i = 0; i < num_samples; ++i) {
+      maps[3 * i] = std::get<0>(idx_maps[i]);
+      maps[3 * i + 1] = std::get<1>(idx_maps[i]);
+      maps[3 * i + 2] = std::get<2>(idx_maps[i]);
+    }
+  } else {
+    // Shuffle.
+    // We need a 64 bit random number generator as we might have more
+    // than 2 billion samples.
+    std::mt19937_64 rand64_gen(seed + 1);
+    for (auto i = (num_samples - 1); i > 0; --i) {
+      const auto j = static_cast<int64_t>(rand64_gen() % (i + 1));
+      const auto i0 = 3 * i;
+      const auto j0 = 3 * j;
+      // Swap values.
+      swap(maps[i0], maps[j0]);
+      swap(maps[i0 + 1], maps[j0 + 1]);
+      swap(maps[i0 + 2], maps[j0 + 2]);
+    }
   }
 
   // Method to deallocate memory.
@@ -427,21 +447,21 @@ py::array build_mapping(const py::array_t<int64_t> &docs_,
                         const uint64_t max_num_samples,
                         const int max_seq_length, const double short_seq_prob,
                         const int seed, const bool verbose,
-                        const int32_t min_num_sent) {
+                        const int32_t min_num_sent, const bool sort_samples) {
   if (sizes_.size() > std::numeric_limits<uint32_t>::max()) {
     if (verbose) {
       cout << "    using uint64 for data mapping..." << endl << std::flush;
     }
     return build_mapping_impl<uint64_t>(
         docs_, sizes_, num_epochs, max_num_samples, max_seq_length,
-        short_seq_prob, seed, verbose, min_num_sent);
+        short_seq_prob, seed, verbose, min_num_sent, sort_samples);
   } else {
     if (verbose) {
       cout << "    using uint32 for data mapping..." << endl << std::flush;
     }
     return build_mapping_impl<uint32_t>(
         docs_, sizes_, num_epochs, max_num_samples, max_seq_length,
-        short_seq_prob, seed, verbose, min_num_sent);
+        short_seq_prob, seed, verbose, min_num_sent, sort_samples);
   }
 }
 

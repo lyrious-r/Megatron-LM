@@ -638,7 +638,8 @@ def get_samples_mapping(indexed_dataset,
                         short_seq_prob,
                         seed,
                         name,
-                        binary_head):
+                        binary_head,
+                        sort_samples=False):
     """Get a list that maps a sample index to a starting sentence index, end sentence index, and length"""
 
     if not num_epochs:
@@ -687,7 +688,8 @@ def get_samples_mapping(indexed_dataset,
             short_seq_prob,
             seed,
             verbose,
-            2 if binary_head else 1)
+            2 if binary_head else 1,
+            sort_samples)
         print_rank_0(' > done building samples index maping')
         np.save(indexmap_filename, samples_mapping, allow_pickle=True)
         print_rank_0(' > saved the index mapping in {}'.format(
