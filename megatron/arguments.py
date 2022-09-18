@@ -325,6 +325,12 @@ def validate_args(args, defaults={}):
     if args.sequence_parallel:
         args.async_tensor_model_parallel_allreduce = False
 
+    if args.seq_len_buckets is not None:
+        try:
+            args.seq_len_buckets = [int(x) for x in args.seq_len_buckets.split(',')]
+        except:
+            raise ValueError('seq_len_buckets must be a comma separated list of integers')
+
     _print_args(args)
     return args
 
@@ -574,8 +580,12 @@ def _add_training_args(parser):
                        choices=['adam', 'sgd'],
                        help='Optimizer function')
     group.add_argument('--dataloader-type', type=str, default=None,
-                       choices=['single', 'cyclic'],
+                       choices=['single', 'cyclic', 'sorted'],
                        help='Single pass vs multiple pass data loader')
+    group.add_argument('--dynamic-batchsize', type=bool, action="store_true",
+                       help='Use dynamic batch size for training')
+    group.add_argument('--seq-len-buckets', type=str, default=None,
+                       help="Candidate sequence lengths for dynamic batch size")
     group.add_argument('--no-async-tensor-model-parallel-allreduce',
                        action='store_false',
                        help='Disable asynchronous execution of '

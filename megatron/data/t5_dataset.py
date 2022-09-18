@@ -31,11 +31,12 @@ class T5Dataset(torch.utils.data.Dataset):
     def __init__(self, name, indexed_dataset, data_prefix,
                  num_epochs, max_num_samples, masked_lm_prob,
                  max_seq_length, max_seq_length_dec,
-                 short_seq_prob, seed):
+                 short_seq_prob, seed, sort_samples=False):
 
         # Params to store.
         self.name = name
         self.seed = seed
+        self.sorted = sort_samples
         self.masked_lm_prob = masked_lm_prob
         self.max_seq_length = max_seq_length
         self.max_seq_length_dec = max_seq_length_dec
@@ -52,7 +53,8 @@ class T5Dataset(torch.utils.data.Dataset):
                                                    short_seq_prob,
                                                    self.seed,
                                                    self.name,
-                                                   False)
+                                                   False,
+                                                   sort_samples=sort_samples)
 
         # Vocab stuff.
         tokenizer = get_tokenizer()
@@ -67,21 +69,30 @@ class T5Dataset(torch.utils.data.Dataset):
         self.sentinel_tokens = tokenizer.additional_special_tokens_ids
         assert len(self.sentinel_tokens) > 0, "Provide the argument --vocab-extra-ids 100 to the script"
 
+    def get_max_seq_len(self):
+        return min(np.max(self.samples_mapping[:, 2]), self.max_seq_length)
+
+    def get_seq_len(self, idx):
+        return self.samples_mapping[idx, 2]
+
+    def set_per_sample_seq_len_func(self, set_per_sample_seq_len_func):
+        self.set_per_sample_seq_len_func = set_per_sample_seq_len_func
+
     def __len__(self):
         return self.samples_mapping.shape[0]
 
     def __getitem__(self, idx):
-
-        start_index, end_index, seq_length = self.samples_mapping[idx]
+        start_index, end_index, _ = self.samples_mapping[idx]
+        bucket_length, dec_bucket_length = self.set_per_sample_seq_len_func(idx)
         sample = []
         for index in range(start_index, end_index):
             sample.append(self.indexed_dataset[index])
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))
-        return build_training_sample(sample, seq_length,
-                                     self.max_seq_length,  # needed for padding
-                                     self.max_seq_length_dec,
+        return build_training_sample(sample, bucket_length,
+                                     bucket_length,  # needed for padding
+                                     dec_bucket_length,
                                      self.vocab_id_list,
                                      self.vocab_id_to_token_dict,
                                      self.cls_id, self.sep_id,

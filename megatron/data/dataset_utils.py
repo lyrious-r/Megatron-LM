@@ -419,7 +419,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     masked_lm_prob, short_seq_prob, seed,
                                     skip_warmup, binary_head=False,
                                     max_seq_length_dec=None,
-                                    dataset_type='standard_bert'):
+                                    dataset_type='standard_bert',
+                                    sort_samples=False):
 
     if len(data_prefix) == 1:
         return _build_train_valid_test_datasets(data_prefix[0],
@@ -430,7 +431,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                                 skip_warmup,
                                                 binary_head,
                                                 max_seq_length_dec,
-                                                dataset_type=dataset_type)
+                                                dataset_type=dataset_type,
+                                                sort_samples=sort_samples)
     # Blending dataset.
     # Parse the values.
     output = get_datasets_weights_and_num_samples(data_prefix,
@@ -446,7 +448,7 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             prefixes[i], data_impl, splits_string,
             datasets_train_valid_test_num_samples[i],
             max_seq_length, masked_lm_prob, short_seq_prob,
-            seed, skip_warmup, binary_head, dataset_type=dataset_type)
+            seed, skip_warmup, binary_head, dataset_type=dataset_type, sort_samples=sort_samples)
         if train_ds:
             train_datasets.append(train_ds)
         if valid_ds:
@@ -475,7 +477,8 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                      masked_lm_prob, short_seq_prob, seed,
                                      skip_warmup, binary_head,
                                      max_seq_length_dec,
-                                     dataset_type='standard_bert'):
+                                     dataset_type='standard_bert',
+                                     sort_samples=False):
 
     if dataset_type not in DSET_TYPES:
         raise ValueError("Invalid dataset_type: ", dataset_type)
@@ -537,6 +540,8 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                 max_seq_length=max_seq_length,
                 seed=seed,
             )
+            if dataset_type == DSET_TYPE_T5:
+                kwargs["sort_samples"] = sort_samples
 
             if dataset_type == DSET_TYPE_ICT:
                 args = get_args()
