@@ -582,7 +582,7 @@ def _add_training_args(parser):
     group.add_argument('--dataloader-type', type=str, default=None,
                        choices=['single', 'cyclic', 'sorted'],
                        help='Single pass vs multiple pass data loader')
-    group.add_argument('--dynamic-batchsize', type=bool, action="store_true",
+    group.add_argument('--dynamic-batchsize', action="store_true",
                        help='Use dynamic batch size for training')
     group.add_argument('--seq-len-buckets', type=str, default=None,
                        help="Candidate sequence lengths for dynamic batch size")

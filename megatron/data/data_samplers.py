@@ -289,7 +289,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             # from 32 to max seq len
             seq_len_buckets = [
                 2**i
-                for i in range(5, int(np.ceil(np.log2(self.dataset.get_max_seq_len()))))
+                for i in range(
+                    5, int(np.ceil(np.log2(self.dataset.get_max_seq_len()))) + 1
+                )
             ]
             self._seq_len_buckets = seq_len_buckets
         if not self._dec_seq_len_buckets:
@@ -311,10 +313,11 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 args.kv_channels,
                 tp_degree=mpu.get_tensor_model_parallel_world_size(),
             )
+            inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
             for idx, seq_len in enumerate(self._seq_len_buckets):
                 self._per_seq_len_mbs[idx] = inv_mem_model.get_microbatch_size(seq_len)
         # broadcast
-        buffer = torch.cuda.Tensor(self._per_seq_len_mbs)
+        buffer = torch.cuda.IntTensor(self._per_seq_len_mbs)
         torch.distributed.broadcast(
             buffer,
             src=mpu.get_data_parallel_src_rank(),
@@ -350,7 +353,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 num_current_bucket_samples = next_bucket_start_idx - start_idx
             num_batches = num_current_bucket_samples // total_batch_size
             end_idx = start_idx + num_batches * total_batch_size
-            self._per_seq_len_bucket_num_samples = num_batches * total_batch_size
+            self._per_seq_len_bucket_num_samples[bucket_idx] = (
+                num_batches * total_batch_size
+            )
             if bucket_idx != len(self._seq_len_buckets) - 1:
                 self._per_seq_len_bucket_start_indices[bucket_idx + 1] = end_idx
         adusted_total_samples = sum(self._per_seq_len_bucket_num_samples)
@@ -376,20 +381,28 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         # set per sample seq len func for dataset
         seq_len_ranges = []
         for start_idx, size, seq_len in zip(
-            self._per_seq_len_bucket_start_indices, self._per_seq_len_bucket_num_samples, self._seq_len_buckets
+            self._per_seq_len_bucket_start_indices,
+            self._per_seq_len_bucket_num_samples,
+            self._seq_len_buckets,
         ):
             if size > 0:
                 dec_seq_len = seq_len * self.dataset.masked_lm_prob
-                dec_bucket_idx = bisect.bisect_left(self._dec_seq_len_buckets, dec_seq_len)
+                dec_bucket_idx = bisect.bisect_left(
+                    self._dec_seq_len_buckets, dec_seq_len
+                )
                 if dec_bucket_idx >= len(self._dec_seq_len_buckets):
                     dec_bucket_idx -= 1
                 dec_seq_len = self._dec_seq_len_buckets[dec_bucket_idx]
                 seq_len_ranges.append((start_idx, seq_len, dec_seq_len))
+
         def per_sample_seq_len_func(idx):
-            bucket_idx = bisect.bisect_right(seq_len_ranges, idx, key=lambda x: x[0]) - 1
+            bucket_idx = (
+                bisect.bisect_right(seq_len_ranges, idx, key=lambda x: x[0]) - 1
+            )
             bucket_idx = bucket_idx - 1
             assert bucket_idx >= 0
             return seq_len_ranges[bucket_idx][1], seq_len_ranges[bucket_idx][2]
+
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
 
     def __iter__(self):

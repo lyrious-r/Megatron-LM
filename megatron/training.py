@@ -889,8 +889,10 @@ def build_train_valid_test_data_iterators(
             args.consumed_valid_samples = (args.iteration // args.eval_interval) * \
                 args.eval_iters * args.global_batch_size
 
-    # Data loader only on rank 0 of each model parallel group.
-    if mpu.get_tensor_model_parallel_rank() == 0 and mpu.get_pipeline_model_parallel_rank() == 0:
+    # Data loader only on rank 0 of each tensor model parallel group.
+    # Data loader may also be needed on decoder first stage, so we duplicate
+    # it across pipeline model ranks.
+    if mpu.get_tensor_model_parallel_rank() == 0:
 
         # Number of train/valid/test samples.
         if args.train_samples:
@@ -939,7 +941,7 @@ def build_train_valid_test_data_iterators(
 
     # Build iterators.
     dl_type = args.dataloader_type
-    assert dl_type in ['single', 'cyclic']
+    assert dl_type in ['single', 'cyclic', 'sorted']
 
     if train_dataloader is not None:
         train_data_iterator = iter(train_dataloader) if dl_type == 'single' \
