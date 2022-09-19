@@ -474,20 +474,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 yield batch_size, enc_seq_len, dec_seq_len
         return ShapeIterator(shape_generator)
 
-
     def __iter__(self):
-        # active_total_samples = self.total_samples - self.last_batch_size
-        # self.epoch = self.consumed_samples // active_total_samples
-        # current_epoch_samples = self.consumed_samples % active_total_samples
-        # assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
-
-        # if isinstance(self.dataset, RandomSeedDataset):
-        #     self.dataset.set_epoch(self.epoch)
-
-        # if not self.data_sharding:
-        #     print(
-        #         "WARNING: data sharding must be enabled for sorted sampler. Ignoring setting."
-        #     )
         if self._dynamic_batchsize:
             batch_order, batch_offset = self._dynamic_size_get_batch_order()
             for batch_id in batch_order[batch_offset:]:
