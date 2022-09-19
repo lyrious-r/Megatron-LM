@@ -65,6 +65,8 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_sharding=args.data_sharding,
             dynamic_batchsize=args.dynamic_batchsize,
             seq_len_buckets=args.seq_len_buckets,
+            max_truncation_factor=args.max_truncation_factor,
+            min_truncation_seq_len=args.min_truncation_seq_len,
         )
     else:
         raise Exception(
@@ -260,6 +262,8 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         dynamic_batchsize=False,
         seq_len_buckets=None,
         dec_seq_len_buckets=None,
+        max_truncation_factor=0.05,
+        min_truncation_seq_len=512,
     ):
         super().__init__(
             dataset,
@@ -280,6 +284,8 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         self._dynamic_batchsize = dynamic_batchsize
         self._seq_len_buckets = seq_len_buckets
         self._dec_seq_len_buckets = dec_seq_len_buckets
+        self._max_truncation_factor = max_truncation_factor
+        self._min_truncation_seq_len = min_truncation_seq_len
         if dynamic_batchsize:
             self._precalc_batches()
 
@@ -331,6 +337,11 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             bucket_idx = bisect.bisect_left(self._seq_len_buckets, seq_len)
             if bucket_idx == len(self._seq_len_buckets):
                 bucket_idx -= 1
+            # see if seq_len is within truncation factor of the previous bucket
+            if bucket_idx > 1 and seq_len > self._min_truncation_seq_len:
+                prev_bucket_seq_len = self._seq_len_buckets[bucket_idx - 1]
+                if seq_len <= prev_bucket_seq_len * (1 + self._max_truncation_factor):
+                    bucket_idx -= 1
             if self._per_seq_len_bucket_start_indices[bucket_idx] == -1:
                 self._per_seq_len_bucket_start_indices[bucket_idx] = i
         # adjust start indices so each bucket's number of samples is a multiple of
@@ -374,12 +385,13 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 for mb_idx in range(n_microbatches):
                     self._batches.append(
                         (
-                            start_offset,
                             start_offset + mb_idx * self._per_seq_len_mbs[bucket_idx],
+                            start_offset + (mb_idx + 1) * self._per_seq_len_mbs[bucket_idx],
                         )
                     )
         # set per sample seq len func for dataset
-        seq_len_ranges = []
+        seq_len_start_indices = []
+        enc_dec_seq_lengths = []
         for start_idx, size, seq_len in zip(
             self._per_seq_len_bucket_start_indices,
             self._per_seq_len_bucket_num_samples,
@@ -393,16 +405,13 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 if dec_bucket_idx >= len(self._dec_seq_len_buckets):
                     dec_bucket_idx -= 1
                 dec_seq_len = self._dec_seq_len_buckets[dec_bucket_idx]
-                seq_len_ranges.append((start_idx, seq_len, dec_seq_len))
+                seq_len_start_indices.append(start_idx)
+                enc_dec_seq_lengths.append((seq_len, dec_seq_len))
 
         def per_sample_seq_len_func(idx):
-            bucket_idx = (
-                bisect.bisect_right(seq_len_ranges, idx, key=lambda x: x[0]) - 1
-            )
-            bucket_idx = bucket_idx - 1
+            bucket_idx = bisect.bisect_right(seq_len_start_indices, idx) - 1
             assert bucket_idx >= 0
-            return seq_len_ranges[bucket_idx][1], seq_len_ranges[bucket_idx][2]
-
+            return enc_dec_seq_lengths[bucket_idx][0], enc_dec_seq_lengths[bucket_idx][1]
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
 
     def __iter__(self):
@@ -433,7 +442,8 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                     ) * self.data_parallel_size
                 else:
                     break
-            for batch in batch_order[batch_offset:]:
+            for batch_id in batch_order[batch_offset:]:
+                batch = self._batches[batch_id]
                 sample_indices = [idx for idx in range(batch[0], batch[1])]
                 self.consumed_samples += len(sample_indices) * self.data_parallel_size
                 yield sample_indices

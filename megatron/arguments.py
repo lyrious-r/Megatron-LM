@@ -586,6 +586,12 @@ def _add_training_args(parser):
                        help='Use dynamic batch size for training')
     group.add_argument('--seq-len-buckets', type=str, default=None,
                        help="Candidate sequence lengths for dynamic batch size")
+    group.add_argument('--max-truncation-factor', type=float, default=0.05,
+                       help="When grouping samples by sequence length, samples with seq length "
+                          "within max_truncation_factor of the previous bucket may be truncated "
+                          "to the previous bucket's sequence length to avoid excessive padding.")
+    group.add_argument('--min-truncation-seq-len', type=int, default=512,
+                       help="Sequence lengths shorter than this value will not be truncated.")
     group.add_argument('--no-async-tensor-model-parallel-allreduce',
                        action='store_false',
                        help='Disable asynchronous execution of '

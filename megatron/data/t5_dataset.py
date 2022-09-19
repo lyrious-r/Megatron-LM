@@ -75,15 +75,15 @@ class T5Dataset(torch.utils.data.Dataset):
     def get_seq_len(self, idx):
         return self.samples_mapping[idx, 2]
 
-    def set_per_sample_seq_len_func(self, set_per_sample_seq_len_func):
-        self.set_per_sample_seq_len_func = set_per_sample_seq_len_func
+    def set_per_sample_seq_len_func(self, per_sample_seq_len_func):
+        self.per_sample_seq_len_func = per_sample_seq_len_func
 
     def __len__(self):
         return self.samples_mapping.shape[0]
 
     def __getitem__(self, idx):
         start_index, end_index, _ = self.samples_mapping[idx]
-        bucket_length, dec_bucket_length = self.set_per_sample_seq_len_func(idx)
+        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
         sample = []
         for index in range(start_index, end_index):
             sample.append(self.indexed_dataset[index])
