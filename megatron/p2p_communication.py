@@ -255,7 +255,7 @@ def send_forward_recv_backward(output_tensor, send_tensor_shape=None, recv_tenso
             tensor_send_prev=None,
             recv_prev=False,
             recv_next=True,
-            tensor_shape=send_tensor_shape,
+            send_tensor_shape=send_tensor_shape,
             recv_tensor_shape=recv_tensor_shape)
         if timers is not None:
             timers('forward-send-backward-recv').stop()
