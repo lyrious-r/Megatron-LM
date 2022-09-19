@@ -133,11 +133,16 @@ def pretrain(train_valid_test_dataset_provider,
             build_train_valid_test_data_iterators(train_valid_test_dataset_provider)
             for _ in range(len(model))
         ]
-        train_data_iterator = [data_iterators[0] for data_iterators in all_data_iterators]
-        valid_data_iterator = [data_iterators[1] for data_iterators in all_data_iterators]
-        test_data_iterator = [data_iterators[2] for data_iterators in all_data_iterators]
+        train_data_iterator = [data_iterators[0][0] for data_iterators in all_data_iterators]
+        train_shape_iterator = [data_iterators[0][1] for data_iterators in all_data_iterators]
+        valid_data_iterator = [data_iterators[1][0] for data_iterators in all_data_iterators]
+        valid_shape_iterator = [data_iterators[1][1] for data_iterators in all_data_iterators]
+        test_data_iterator = [data_iterators[2][0] for data_iterators in all_data_iterators]
+        test_shape_iterator = [data_iterators[2][1] for data_iterators in all_data_iterators]
     else:
-        train_data_iterator, valid_data_iterator, test_data_iterator \
+        (train_data_iterator, train_shape_iterator), \
+        (valid_data_iterator, valid_shape_iterator), \
+        (test_data_iterator, test_shape_iterator) \
             = build_train_valid_test_data_iterators(
                 train_valid_test_dataset_provider)
     timers('train/valid/test-data-iterators-setup').stop()
@@ -152,7 +157,8 @@ def pretrain(train_valid_test_dataset_provider,
     if args.do_train and args.train_iters > 0:
         iteration = train(forward_step_func,
                           model, optimizer, opt_param_scheduler,
-                          train_data_iterator, valid_data_iterator,
+                          train_data_iterator, train_shape_iterator,
+                          valid_data_iterator, valid_shape_iterator,
                           process_non_loss_data_func)
     print_datetime('after training is done')
 
@@ -161,7 +167,7 @@ def pretrain(train_valid_test_dataset_provider,
         evaluate_and_print_results(prefix, forward_step_func,
                                    valid_data_iterator, model,
                                    iteration, process_non_loss_data_func,
-                                   False)
+                                   False, shape_iterator=valid_shape_iterator)
 
     if args.save and iteration != 0:
         save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
@@ -172,7 +178,7 @@ def pretrain(train_valid_test_dataset_provider,
         evaluate_and_print_results(prefix, forward_step_func,
                                    test_data_iterator, model,
                                    0, process_non_loss_data_func,
-                                   True)
+                                   True, shape_iterator=test_shape_iterator)
 
 def update_train_iters(args):
 
@@ -400,7 +406,7 @@ def setup_model_and_optimizer(model_provider_func,
 
 
 def train_step(forward_step_func, data_iterator,
-               model, optimizer, opt_param_scheduler):
+               model, optimizer, opt_param_scheduler, shape_iterator=None):
     """Single training step."""
     args = get_args()
     timers = get_timers()
@@ -415,7 +421,7 @@ def train_step(forward_step_func, data_iterator,
     forward_backward_func = get_forward_backward_func()
     losses_reduced = forward_backward_func(
         forward_step_func, data_iterator, model,
-        optimizer, timers, forward_only=False)
+        optimizer, timers, forward_only=False, shape_iterator=shape_iterator)
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
@@ -662,7 +668,8 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler):
 
 
 def train(forward_step_func, model, optimizer, opt_param_scheduler,
-          train_data_iterator, valid_data_iterator,
+          train_data_iterator, train_shape_iterator,
+          valid_data_iterator, valid_shape_iterator,
           process_non_loss_data_func):
     """Train the model function."""
     args = get_args()
@@ -692,7 +699,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        train_data_iterator,
                        model,
                        optimizer,
-                       opt_param_scheduler)
+                       opt_param_scheduler,
+                       shape_iterator=train_shape_iterator)
         iteration += 1
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
@@ -722,7 +730,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             evaluate_and_print_results(prefix, forward_step_func,
                                        valid_data_iterator, model,
                                        iteration, process_non_loss_data_func,
-                                       False)
+                                       False, shape_iterator=valid_shape_iterator)
 
         # Checkpointing
         saved_checkpoint = False
@@ -772,7 +780,8 @@ def evaluate(forward_step_func,
              data_iterator,
              model,
              process_non_loss_data_func,
-             verbose=False):
+             verbose=False,
+             shape_iterator=None):
     """Evaluation."""
     args = get_args()
 
@@ -796,7 +805,7 @@ def evaluate(forward_step_func,
             forward_backward_func = get_forward_backward_func()
             loss_dicts = forward_backward_func(
                 forward_step_func, data_iterator, model, optimizer=None,
-                timers=None, forward_only=True)
+                timers=None, forward_only=True, shape_iterator=shape_iterator)
 
             # Empty unused memory
             if args.empty_unused_memory_level >= 1:
@@ -830,14 +839,14 @@ def evaluate(forward_step_func,
 def evaluate_and_print_results(prefix, forward_step_func,
                                data_iterator, model,
                                iteration, process_non_loss_data_func,
-                               verbose=False):
+                               verbose=False, shape_iterator=None):
     """Helper function to evaluate and dump results on screen."""
     args = get_args()
     writer = get_tensorboard_writer()
 
     total_loss_dict, collected_non_loss_data = evaluate(
         forward_step_func, data_iterator, model,
-        process_non_loss_data_func, verbose)
+        process_non_loss_data_func, verbose, shape_iterator=shape_iterator)
     string = ' validation loss at {} | '.format(prefix)
     for key in total_loss_dict:
         string += '{} value: {:.6E} | '.format(key, total_loss_dict[key].item())
@@ -915,11 +924,11 @@ def build_train_valid_test_data_iterators(
             train_val_test_num_samples)
 
         # Build dataloders.
-        train_dataloader = build_pretraining_data_loader(
+        train_dataloader, train_shape_generator = build_pretraining_data_loader(
             train_ds, args.consumed_train_samples)
-        valid_dataloader = build_pretraining_data_loader(
+        valid_dataloader, valid_shape_generator = build_pretraining_data_loader(
             valid_ds, args.consumed_valid_samples)
-        test_dataloader = build_pretraining_data_loader(test_ds, 0)
+        test_dataloader, test_shape_generator = build_pretraining_data_loader(test_ds, 0)
 
         # Flags to know if we need to do training/validation/testing.
         do_train = train_dataloader is not None and args.train_iters > 0
@@ -949,11 +958,23 @@ def build_train_valid_test_data_iterators(
     else:
         train_data_iterator = None
 
+    if train_shape_generator is not None:
+        train_shape_iterator = iter(train_shape_generator) if dl_type == 'single' \
+                              else iter(cyclic_iter(train_shape_generator))
+    else:
+        train_shape_iterator = None
+
     if valid_dataloader is not None:
         valid_data_iterator = iter(valid_dataloader) if dl_type == 'single' \
                               else iter(cyclic_iter(valid_dataloader))
     else:
         valid_data_iterator = None
+
+    if valid_shape_generator is not None:
+        valid_shape_iterator = iter(valid_shape_generator) if dl_type == 'single' \
+                              else iter(cyclic_iter(valid_shape_generator))
+    else:
+        valid_shape_iterator = None
 
     if test_dataloader is not None:
         test_data_iterator = iter(test_dataloader) if dl_type == 'single' \
@@ -961,4 +982,10 @@ def build_train_valid_test_data_iterators(
     else:
         test_data_iterator = None
 
-    return train_data_iterator, valid_data_iterator, test_data_iterator
+    if test_shape_generator is not None:
+        test_shape_iterator = iter(test_shape_generator) if dl_type == 'single' \
+                              else iter(cyclic_iter(test_shape_generator))
+    else:
+        test_shape_iterator = None
+
+    return (train_data_iterator, train_shape_iterator), (valid_data_iterator, valid_shape_iterator), (test_data_iterator, test_shape_iterator)

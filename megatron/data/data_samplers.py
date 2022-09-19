@@ -44,6 +44,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_rank=mpu.get_data_parallel_rank(),
             data_parallel_size=mpu.get_data_parallel_world_size(),
         )
+        shape_generator = None
     elif args.dataloader_type == "cyclic":
         batch_sampler = MegatronPretrainingRandomSampler(
             dataset,
@@ -54,6 +55,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_size=mpu.get_data_parallel_world_size(),
             data_sharding=args.data_sharding,
         )
+        shape_generator = None
     elif args.dataloader_type == "sorted":
         batch_sampler = MegatronPretrainingSortedSampler(
             dataset,
@@ -68,6 +70,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             max_truncation_factor=args.max_truncation_factor,
             min_truncation_seq_len=args.min_truncation_seq_len,
         )
+        shape_generator = batch_sampler.get_shape_generator()
     else:
         raise Exception(
             "{} dataloader type is not supported.".format(args.dataloader_type)
@@ -79,7 +82,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
         batch_sampler=batch_sampler,
         num_workers=args.num_workers,
         pin_memory=True,
-    )
+    ), shape_generator
 
 
 class MegatronPretrainingSampler:
@@ -303,7 +306,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         if not self._dec_seq_len_buckets:
             self._dec_seq_len_buckets = self._seq_len_buckets
         self._per_seq_len_mbs = [-1] * len(self._seq_len_buckets)
-        # calculate mbs and broadcast to all dp ranks
+        # calculate mbs and broadcast to all dp and pp ranks
         if mpu.get_data_parallel_rank() == 0:
             args = get_args()
             is_encoder = mpu.is_pipeline_stage_before_split()
@@ -328,6 +331,11 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             buffer,
             src=mpu.get_data_parallel_src_rank(),
             group=mpu.get_data_parallel_group(),
+        )
+        torch.distributed.broadcast(
+            buffer,
+            src=mpu.get_pipeline_model_parallel_first_rank(),
+            group=mpu.get_pipeline_model_parallel_group(),
         )
         self._per_seq_len_mbs = buffer.tolist()
 
@@ -413,8 +421,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             assert bucket_idx >= 0
             return enc_dec_seq_lengths[bucket_idx][0], enc_dec_seq_lengths[bucket_idx][1]
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
+        self._per_sample_seq_len_func = per_sample_seq_len_func
 
-    def __iter__(self):
+    def _calc_sample_offsets(self):
         active_total_samples = self.total_samples - self.last_batch_size
         self.epoch = self.consumed_samples // active_total_samples
         current_epoch_samples = self.consumed_samples % active_total_samples
@@ -427,27 +436,63 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             print(
                 "WARNING: data sharding must be enabled for sorted sampler. Ignoring setting."
             )
+        return current_epoch_samples
 
+    def _dynamic_size_get_batch_order(self):
+        current_epoch_samples = self._calc_sample_offsets()
         g = torch.Generator()
         g.manual_seed(self.epoch)
+        n_batches = len(self._batches)
+        batch_order = torch.randperm(n_batches, generator=g).tolist()
+        cumulative_per_batch_samples = 0
+        for batch_offset in range(len(batch_order)):
+            if cumulative_per_batch_samples < current_epoch_samples:
+                batch = self._batches[batch_offset]
+                cumulative_per_batch_samples += (
+                    batch[1] - batch[0]
+                ) * self.data_parallel_size
+            else:
+                break
+        return batch_order, batch_offset
+
+    def get_shape_generator(self):
+        if not self._dynamic_batchsize:
+            return None
+        batch_order, batch_offset = self._dynamic_size_get_batch_order()
+        def shape_generator():
+            # generates (mbs, enc_seq_len, dec_seq_len) tuples
+            for batch_id in batch_order[batch_offset:]:
+                batch = self._batches[batch_id]
+                batch_size = batch[1] - batch[0]
+                enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(batch[0])
+                yield batch_size, enc_seq_len, dec_seq_len
+        return shape_generator
+
+
+    def __iter__(self):
+        # active_total_samples = self.total_samples - self.last_batch_size
+        # self.epoch = self.consumed_samples // active_total_samples
+        # current_epoch_samples = self.consumed_samples % active_total_samples
+        # assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
+
+        # if isinstance(self.dataset, RandomSeedDataset):
+        #     self.dataset.set_epoch(self.epoch)
+
+        # if not self.data_sharding:
+        #     print(
+        #         "WARNING: data sharding must be enabled for sorted sampler. Ignoring setting."
+        #     )
         if self._dynamic_batchsize:
-            n_batches = len(self._batches)
-            batch_order = torch.randperm(n_batches, generator=g).tolist()
-            cumulative_per_batch_samples = 0
-            for batch_offset in range(len(batch_order)):
-                if cumulative_per_batch_samples < current_epoch_samples:
-                    batch = self._batches[batch_offset]
-                    cumulative_per_batch_samples += (
-                        batch[1] - batch[0]
-                    ) * self.data_parallel_size
-                else:
-                    break
+            batch_order, batch_offset = self._dynamic_size_get_batch_order()
             for batch_id in batch_order[batch_offset:]:
                 batch = self._batches[batch_id]
                 sample_indices = [idx for idx in range(batch[0], batch[1])]
                 self.consumed_samples += len(sample_indices) * self.data_parallel_size
                 yield sample_indices
         else:
+            current_epoch_samples = self._calc_sample_offsets()
+            g = torch.Generator()
+            g.manual_seed(self.epoch)
             # since we are using sorted dataset, data access is strided for each rank
             stride_size_per_batch = self.micro_batch_size_times_data_parallel_size
             n_batches = self.total_samples // stride_size_per_batch

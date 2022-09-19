@@ -450,12 +450,22 @@ def is_pipeline_stage_after_split(rank=None):
 
 
 def is_pipeline_stage_at_split():
-    """Return true if pipeline stage executes decoder block and next
-    stage executes encoder block for a model with both encoder and
+    """Return true if pipeline stage executes encoder block and next
+    stage executes decoder block for a model with both encoder and
     decoder."""
     rank = get_pipeline_model_parallel_rank()
     return is_pipeline_stage_before_split(rank) and \
             is_pipeline_stage_after_split(rank+1)
+
+def is_first_decoder_stage():
+    """Return true if last pipeline stage executes encoder block and this
+    stage executes decoder block for a model with both encoder and
+    decoder."""
+    rank = get_pipeline_model_parallel_rank()
+    if rank == 0:
+        return False
+    return is_pipeline_stage_before_split(rank-1) and \
+            is_pipeline_stage_after_split(rank)
 
 
 def get_virtual_pipeline_model_parallel_rank():

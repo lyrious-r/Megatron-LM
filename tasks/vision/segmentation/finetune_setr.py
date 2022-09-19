@@ -107,7 +107,7 @@ def segmentation():
 
         return output_tensor, partial(cross_entropy_loss_func, images, masks)
 
-    def calculate_correct_answers(model, dataloader, epoch):
+    def calculate_correct_answers(model, dataloader, epoch, shape_iterator=None):
         """Calculate correct over total answers"""
 
         forward_backward_func = get_forward_backward_func()
@@ -153,7 +153,8 @@ def segmentation():
                                                    batch, model,
                                                    optimizer=None,
                                                    timers=None,
-                                                   forward_only=True)
+                                                   forward_only=True,
+                                                   shape_iterator=shape_iterator)
                 for loss_dict in loss_dicts:
                     if performs is None:
                         performs = loss_dict['performs']

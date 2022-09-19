@@ -76,7 +76,7 @@ def accuracy_func_provider(single_dataset_provider):
 
 
 def calculate_correct_answers(name, model, dataloader,
-                              epoch, output_predictions):
+                              epoch, output_predictions, shape_iterator=None):
     """Calculate correct over total answers and return prediction if the
     `output_predictions` is true."""
     args = get_args()
@@ -154,7 +154,7 @@ def calculate_correct_answers(name, model, dataloader,
             args.global_batch_size = actual_batch_size * sample_multiplier * num_micro_batches
 
             loss_dicts = forward_backward_func(correct_answers_forward_step, batch, model,
-                                               optimizer=None, timers=None, forward_only=True)
+                                               optimizer=None, timers=None, forward_only=True, shape_iterator=shape_iterator)
 
             for loss_dict in loss_dicts:
                 if output_predictions:

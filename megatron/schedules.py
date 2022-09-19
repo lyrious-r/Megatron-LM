@@ -225,7 +225,8 @@ def forward_backward_no_pipelining(forward_step_func,
                                    optimizer,
                                    timers,
                                    forward_only,
-                                   collect_non_loss_data=False):
+                                   collect_non_loss_data=False,
+                                   **kwargs):
     """Run forward and backward passes with no pipeline parallelism
     (no inter-stage communication).
 
@@ -264,7 +265,8 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                                                   optimizer,
                                                   timers,
                                                   forward_only, 
-                                                  collect_non_loss_data=False):
+                                                  collect_non_loss_data=False,
+                                                  **kwargs):
     """Run interleaved 1F1B schedule (model split into model chunks), with
     communication between pipeline stages as needed.
 
@@ -507,7 +509,7 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
     return forward_data_store
 
 
-def get_tensor_shapes(rank, model_type):
+def get_tensor_shapes(rank, model_type, dynamic_shapes=None):
     # Determine right tensor sizes (based on position of rank with respect to split
     # rank) and model size.
     # Send two tensors if model is T5 and rank is in decoder stage:
@@ -519,24 +521,31 @@ def get_tensor_shapes(rank, model_type):
     args = get_args()
     tensor_shapes = []
 
-    if args.sequence_parallel:
-        seq_length = args.seq_length // mpu.get_tensor_model_parallel_world_size()
+    if dynamic_shapes is not None:
+        micro_batch_size, enc_seq_length, dec_seq_length = dynamic_shapes
     else:
-        seq_length = args.seq_length
+        micro_batch_size = args.micro_batch_size
+        enc_seq_length = args.seq_length
+        dec_seq_length = args.decoder_seq_length
+
+    if args.sequence_parallel:
+        seq_length = enc_seq_length // mpu.get_tensor_model_parallel_world_size()
+    else:
+        seq_length = enc_seq_length
 
     if model_type == ModelType.encoder_and_decoder:
         if args.sequence_parallel:
-            decoder_seq_length = args.decoder_seq_length // mpu.get_tensor_model_parallel_world_size()
+            decoder_seq_length = dec_seq_length // mpu.get_tensor_model_parallel_world_size()
         else:
-            decoder_seq_length = args.decoder_seq_length
+            decoder_seq_length = dec_seq_length
 
         if mpu.is_pipeline_stage_before_split(rank):
-            tensor_shapes.append((seq_length, args.micro_batch_size, args.hidden_size))
+            tensor_shapes.append((seq_length, micro_batch_size, args.hidden_size))
         else:
-            tensor_shapes.append((decoder_seq_length, args.micro_batch_size, args.hidden_size))
-            tensor_shapes.append((seq_length, args.micro_batch_size, args.hidden_size))
+            tensor_shapes.append((decoder_seq_length, micro_batch_size, args.hidden_size))
+            tensor_shapes.append((seq_length, micro_batch_size, args.hidden_size))
     else:
-        tensor_shapes.append((seq_length, args.micro_batch_size, args.hidden_size))
+        tensor_shapes.append((seq_length, micro_batch_size, args.hidden_size))
     return tensor_shapes
 
 
@@ -614,7 +623,8 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
                                                      optimizer,
                                                      timers,
                                                      forward_only,
-                                                     collect_non_loss_data=False):
+                                                     collect_non_loss_data=False,
+                                                     shape_iterator=None):
     """Run non-interleaved 1F1B schedule, with communication between pipeline
     stages.
 
@@ -640,8 +650,12 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
         model, (torchDDP, LocalDDP, Float16Module))
     model_type = unwrapped_model.model_type
     rank = mpu.get_pipeline_model_parallel_rank()
-    recv_tensor_shapes = get_tensor_shapes(rank-1, model_type)
-    send_tensor_shapes = get_tensor_shapes(rank, model_type)
+    if shape_iterator is not None:
+        dynamic_shapes = next(shape_iterator)
+    else:
+        dynamic_shapes = None
+    recv_tensor_shapes = get_tensor_shapes(rank-1, model_type, dynamic_shapes)
+    send_tensor_shapes = get_tensor_shapes(rank, model_type, dynamic_shapes)
 
     # Input, output tensors only need to be saved when doing backward passes
     input_tensors = None
