@@ -44,7 +44,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_rank=mpu.get_data_parallel_rank(),
             data_parallel_size=mpu.get_data_parallel_world_size(),
         )
-        shape_generator = None
+        shape_iterator = None
     elif args.dataloader_type == "cyclic":
         batch_sampler = MegatronPretrainingRandomSampler(
             dataset,
@@ -55,7 +55,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_size=mpu.get_data_parallel_world_size(),
             data_sharding=args.data_sharding,
         )
-        shape_generator = None
+        shape_iterator = None
     elif args.dataloader_type == "sorted":
         batch_sampler = MegatronPretrainingSortedSampler(
             dataset,
@@ -70,7 +70,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             max_truncation_factor=args.max_truncation_factor,
             min_truncation_seq_len=args.min_truncation_seq_len,
         )
-        shape_generator = batch_sampler.get_shape_generator()
+        shape_iterator = batch_sampler.get_shape_iterator()
     else:
         raise Exception(
             "{} dataloader type is not supported.".format(args.dataloader_type)
@@ -82,7 +82,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
         batch_sampler=batch_sampler,
         num_workers=args.num_workers,
         pin_memory=True,
-    ), shape_generator
+    ), shape_iterator
 
 
 class MegatronPretrainingSampler:
@@ -251,6 +251,12 @@ class MegatronPretrainingRandomSampler:
                 yield batch
                 batch = []
 
+class ShapeIterator():
+    def __init__(self, shape_generator):
+        self.shape_generator = shape_generator
+
+    def __iter__(self):
+        return self.shape_generator()
 
 class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
     def __init__(
@@ -455,7 +461,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 break
         return batch_order, batch_offset
 
-    def get_shape_generator(self):
+    def get_shape_iterator(self):
         if not self._dynamic_batchsize:
             return None
         batch_order, batch_offset = self._dynamic_size_get_batch_order()
@@ -466,7 +472,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 batch_size = batch[1] - batch[0]
                 enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(batch[0])
                 yield batch_size, enc_seq_len, dec_seq_len
-        return shape_generator
+        return ShapeIterator(shape_generator)
 
 
     def __iter__(self):

@@ -924,11 +924,11 @@ def build_train_valid_test_data_iterators(
             train_val_test_num_samples)
 
         # Build dataloders.
-        train_dataloader, train_shape_generator = build_pretraining_data_loader(
+        train_dataloader, train_shape_iterator = build_pretraining_data_loader(
             train_ds, args.consumed_train_samples)
-        valid_dataloader, valid_shape_generator = build_pretraining_data_loader(
+        valid_dataloader, valid_shape_iterator = build_pretraining_data_loader(
             valid_ds, args.consumed_valid_samples)
-        test_dataloader, test_shape_generator = build_pretraining_data_loader(test_ds, 0)
+        test_dataloader, test_shape_iterator = build_pretraining_data_loader(test_ds, 0)
 
         # Flags to know if we need to do training/validation/testing.
         do_train = train_dataloader is not None and args.train_iters > 0
@@ -958,9 +958,9 @@ def build_train_valid_test_data_iterators(
     else:
         train_data_iterator = None
 
-    if train_shape_generator is not None:
-        train_shape_iterator = iter(train_shape_generator) if dl_type == 'single' \
-                              else iter(cyclic_iter(train_shape_generator))
+    if train_shape_iterator is not None:
+        train_shape_iterator = iter(train_shape_iterator) if dl_type == 'single' \
+                              else iter(cyclic_iter(train_shape_iterator))
     else:
         train_shape_iterator = None
 
@@ -970,9 +970,9 @@ def build_train_valid_test_data_iterators(
     else:
         valid_data_iterator = None
 
-    if valid_shape_generator is not None:
-        valid_shape_iterator = iter(valid_shape_generator) if dl_type == 'single' \
-                              else iter(cyclic_iter(valid_shape_generator))
+    if valid_shape_iterator is not None:
+        valid_shape_iterator = iter(valid_shape_iterator) if dl_type == 'single' \
+                              else iter(cyclic_iter(valid_shape_iterator))
     else:
         valid_shape_iterator = None
 
@@ -982,9 +982,9 @@ def build_train_valid_test_data_iterators(
     else:
         test_data_iterator = None
 
-    if test_shape_generator is not None:
-        test_shape_iterator = iter(test_shape_generator) if dl_type == 'single' \
-                              else iter(cyclic_iter(test_shape_generator))
+    if test_shape_iterator is not None:
+        test_shape_iterator = iter(test_shape_iterator) if dl_type == 'single' \
+                              else iter(cyclic_iter(test_shape_iterator))
     else:
         test_shape_iterator = None
 
