@@ -313,7 +313,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         if self._dynamic_batchsize:
             return len(self._batches)
         else:
-            return len(self.dataset) // (self.micro_batch_size * get_num_microbatches() * self.data_parallel_size)
+            return len(self.dataset) // self.micro_batch_size
 
     def _precalc_batches(self):
         assert self._dynamic_batchsize
