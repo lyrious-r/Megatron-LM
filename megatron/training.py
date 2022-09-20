@@ -179,6 +179,7 @@ def pretrain(train_valid_test_dataset_provider,
                                    test_data_iterator, model,
                                    0, process_non_loss_data_func,
                                    True, shape_iterator=test_shape_iterator)
+    timers.log_all()
 
 def update_train_iters(args):
 

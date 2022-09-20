@@ -286,6 +286,13 @@ class Timers:
         else:
             print(string, flush=True)
 
+    def log_all(self, normalizer=1.0, reset=True):
+        names = []
+        for name in self.timers.keys():
+            if not self.timers[name].started_ and self.timers[name].elapsed_ > 0.0:
+                names.append(name)
+        self.log(names, normalizer, reset)
+
 
 class GlobalMemoryBuffer:
     """Global buffer to avoid dynamic memory allocations.
