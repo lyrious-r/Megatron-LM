@@ -699,6 +699,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     print_datetime('before the start of training step')
     report_memory_flag = True
     while iteration < args.train_iters:
+        timers('interval-time').start()
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
         loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
@@ -712,7 +713,10 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
-
+        timers('interval-time').stop()
+        if args.per_iter_time_log_path is not None:
+            with open(args.per_iter_time_log_path, 'a') as f:
+                f.write(str(timers('interval-time').elapsed()) + "\n")
         # Logging.
         loss_scale = optimizer.get_loss_scale().item()
         params_norm = None

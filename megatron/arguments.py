@@ -596,6 +596,8 @@ def _add_training_args(parser):
                        help='The memory model used to determine the microbatch size')
     group.add_argument('--seq-len-buckets', type=str, default=None,
                        help="Candidate sequence lengths for dynamic batch size")
+    group.add_argument('--per-iter-time-log-path', type=str, default=None,
+                        help='Path to log per iteration time')
     group.add_argument('--max-truncation-factor', type=float, default=0.05,
                        help="When grouping samples by sequence length, samples with seq length "
                           "within max_truncation_factor of the previous bucket may be truncated "
