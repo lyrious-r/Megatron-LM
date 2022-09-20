@@ -332,22 +332,26 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         # calculate mbs and broadcast to all dp and pp ranks
         if mpu.get_data_parallel_rank() == 0:
             args = get_args()
-            is_encoder = mpu.is_pipeline_stage_before_split()
-            num_layers = mpu.get_num_layers(args, True)  # since we only deal with T5
-            n_encoder_layers = num_layers if is_encoder else 0
-            n_decoder_layers = num_layers if not is_encoder else 0
-            inv_mem_model = InvTransformerMemoryModel(
-                args.hidden_size,
-                args.num_attention_heads,
-                n_encoder_layers,
-                n_decoder_layers,
-                args.ffn_hidden_size,
-                args.kv_channels,
-                tp_degree=mpu.get_tensor_model_parallel_world_size(),
-            )
-            inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
-            for idx, seq_len in enumerate(self._seq_len_buckets):
-                self._per_seq_len_mbs[idx] = inv_mem_model.get_microbatch_size(seq_len)
+            if args.memory_model == "plopt":
+                is_encoder = mpu.is_pipeline_stage_before_split()
+                num_layers = mpu.get_num_layers(args, True)  # since we only deal with T5
+                n_encoder_layers = num_layers if is_encoder else 0
+                n_decoder_layers = num_layers if not is_encoder else 0
+                inv_mem_model = InvTransformerMemoryModel(
+                    args.hidden_size,
+                    args.num_attention_heads,
+                    n_encoder_layers,
+                    n_decoder_layers,
+                    args.ffn_hidden_size,
+                    args.kv_channels,
+                    tp_degree=mpu.get_tensor_model_parallel_world_size(),
+                )
+                inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
+                for idx, seq_len in enumerate(self._seq_len_buckets):
+                    self._per_seq_len_mbs[idx] = inv_mem_model.get_microbatch_size(seq_len)
+            else:
+                for idx, seq_len in enumerate(self._seq_len_buckets):
+                    self._per_seq_len_mbs[idx] = (self.micro_batch_size * args.encoder_seq_length) // seq_len
         # broadcast
         buffer = torch.cuda.IntTensor(self._per_seq_len_mbs)
         torch.distributed.broadcast(
