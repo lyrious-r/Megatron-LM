@@ -584,6 +584,9 @@ def _add_training_args(parser):
                        help='Single pass vs multiple pass data loader')
     group.add_argument('--dynamic-batchsize', action="store_true",
                        help='Use dynamic batch size for training')
+    group.add_argument('--dynamic-batch-level', type=str, default='batch',
+                       choices=['batch', 'microbatch'],
+                       help='Dynamic batch size level (batch or microbatch)')
     group.add_argument('--seq-len-buckets', type=str, default=None,
                        help="Candidate sequence lengths for dynamic batch size")
     group.add_argument('--max-truncation-factor', type=float, default=0.05,

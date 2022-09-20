@@ -665,6 +665,10 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
         send_tensor_shapes = get_tensor_shapes(rank, model_type, dynamic_shapes)
         send_tensor_shapes_per_mb.append(send_tensor_shapes)
         recv_tensor_shapes_per_mb.append(recv_tensor_shapes)
+    if args.dynamic_batch_level == "batch":
+        # sanity check
+        send_tensor_shapes_per_mb and all(send_tensor_shapes_per_mb[0] == elem for elem in send_tensor_shapes_per_mb)
+        recv_tensor_shapes_per_mb and all(recv_tensor_shapes_per_mb[0] == elem for elem in recv_tensor_shapes_per_mb)
 
     # Input, output tensors only need to be saved when doing backward passes
     input_tensors = None

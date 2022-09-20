@@ -23,6 +23,7 @@ import numpy as np
 from torch.utils.data import Dataset
 from megatron import get_args
 from megatron import mpu
+from megatron import get_num_microbatches
 from megatron.data.t5_dataset import T5Dataset
 
 from plopt.memory_utils import InvTransformerMemoryModel
@@ -66,6 +67,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_size=mpu.get_data_parallel_world_size(),
             data_sharding=args.data_sharding,
             dynamic_batchsize=args.dynamic_batchsize,
+            dynamic_batch_level=args.dynamic_batch_level,
             seq_len_buckets=args.seq_len_buckets,
             max_truncation_factor=args.max_truncation_factor,
             min_truncation_seq_len=args.min_truncation_seq_len,
@@ -269,6 +271,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         data_parallel_size,
         data_sharding,
         dynamic_batchsize=False,
+        dynamic_batch_level="batch",
         seq_len_buckets=None,
         dec_seq_len_buckets=None,
         max_truncation_factor=0.05,
@@ -290,7 +293,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         assert (
             hasattr(dataset, "sorted") and dataset.sorted
         ), "Dataset should be sorted for sorted sampler."
+        self._n_microbatches_per_global_batch = get_num_microbatches()
         self._dynamic_batchsize = dynamic_batchsize
+        self._dynamic_batch_level = dynamic_batch_level
         self._seq_len_buckets = seq_len_buckets
         self._dec_seq_len_buckets = dec_seq_len_buckets
         self._max_truncation_factor = max_truncation_factor
@@ -360,11 +365,14 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             if self._per_seq_len_bucket_start_indices[bucket_idx] == -1:
                 self._per_seq_len_bucket_start_indices[bucket_idx] = i
         # adjust start indices so each bucket's number of samples is a multiple of
-        # data parallel size * their corresponding micro batch size
+        # effective batch size
+        effective_batch_size_multiplier = self.data_parallel_size
+        if self._dynamic_batch_level == "batch":
+            effective_batch_size_multiplier *= self._n_microbatches_per_global_batch
         self._per_seq_len_bucket_num_samples = [0] * len(self._seq_len_buckets)
         for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
             total_batch_size = (
-                self._per_seq_len_mbs[bucket_idx] * self.data_parallel_size
+                self._per_seq_len_mbs[bucket_idx] * effective_batch_size_multiplier
             )
             if start_idx == -1:
                 continue

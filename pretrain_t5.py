@@ -87,7 +87,6 @@ def get_batch(data_iterator):
     keys = ['text_enc', 'text_dec', 'labels', 'loss_mask',
             'enc_mask', 'dec_mask', 'enc_dec_mask']
     datatype = torch.int64
-
     # Broadcast data.
     if data_iterator is not None:
         data = next(data_iterator)
@@ -126,10 +125,10 @@ def forward_step(data_iterator, model):
     timers = get_timers()
 
     # Get the batch.
-    timers('batch generator').start()
+    timers('batch-generator').start()
     tokens_enc, tokens_dec, loss_mask, lm_labels, enc_mask, dec_mask, enc_dec_mask \
         = get_batch(data_iterator)
-    timers('batch generator').stop()
+    timers('batch-generator').stop()
 
     # Forward model lm_labels
     output_tensor = model(tokens_enc,
