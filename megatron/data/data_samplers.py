@@ -21,7 +21,7 @@ import bisect
 import torch
 import numpy as np
 from torch.utils.data import Dataset
-from megatron import get_args
+from megatron import get_args, microbatches
 from megatron import mpu
 from megatron import get_num_microbatches
 from megatron.data.t5_dataset import T5Dataset
@@ -461,15 +461,24 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         current_epoch_samples, epoch = self._calc_sample_offsets(is_data_iterator=is_data_iterator)
         g = torch.Generator()
         g.manual_seed(epoch)
-        n_batches = len(self._batches)
+        if self._dynamic_batch_level == "batch":
+            n_batches = len(self._batches) // self._n_microbatches_per_global_batch
+        else:
+            n_batches = len(self._batches)
         batch_order = torch.randperm(n_batches, generator=g).tolist()
         cumulative_per_batch_samples = 0
         for batch_offset in range(len(batch_order)):
+            if self._dynamic_batch_level == "batch":
+                batch_ids = list(range(batch_offset * self._n_microbatches_per_global_batch, 
+                                       (batch_offset + 1) * self._n_microbatches_per_global_batch))
+            else:
+                batch_ids =  [batch_offset]
             if cumulative_per_batch_samples < current_epoch_samples:
-                batch = self._batches[batch_offset]
-                cumulative_per_batch_samples += (
-                    batch[1] - batch[0]
-                ) * self.data_parallel_size
+                for batch_id in batch_ids:
+                    batch = self._batches[batch_id]
+                    cumulative_per_batch_samples += (
+                        batch[1] - batch[0]
+                    ) * self.data_parallel_size
             else:
                 break
         return batch_order, batch_offset
@@ -484,21 +493,33 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             # that shape iterator is in sync with the data iterator upon reset
             batch_order, batch_offset = self._dynamic_size_get_batch_order(is_data_iterator=False)
             for batch_id in batch_order[batch_offset:]:
-                batch = self._batches[batch_id]
-                batch_size = batch[1] - batch[0]
-                enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(batch[0])
-                self._shape_consumed_samples += batch_size * self.data_parallel_size
-                yield batch_size, enc_seq_len, dec_seq_len
+                if self._dynamic_batch_level == "batch":
+                    microbatches = range(batch_id * self._n_microbatches_per_global_batch,
+                                         (batch_id + 1) * self._n_microbatches_per_global_batch)
+                else:
+                    microbatches = [batch_id]
+                for mb in microbatches:
+                    batch = self._batches[mb]
+                    batch_size = batch[1] - batch[0]
+                    enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(batch[0])
+                    self._shape_consumed_samples += batch_size * self.data_parallel_size
+                    yield batch_size, enc_seq_len, dec_seq_len
         return ShapeIterator(shape_generator)
 
     def __iter__(self):
         if self._dynamic_batchsize:
             batch_order, batch_offset = self._dynamic_size_get_batch_order()
             for batch_id in batch_order[batch_offset:]:
-                batch = self._batches[batch_id]
-                sample_indices = [idx for idx in range(batch[0], batch[1])]
-                self.consumed_samples += len(sample_indices) * self.data_parallel_size
-                yield sample_indices
+                if self._dynamic_batch_level == "batch":
+                    microbatches = range(batch_id * self._n_microbatches_per_global_batch,
+                                         (batch_id + 1) * self._n_microbatches_per_global_batch)
+                else:
+                    microbatches = [batch_id]
+                for mb in microbatches:
+                    batch = self._batches[mb]
+                    sample_indices = [idx for idx in range(batch[0], batch[1])]
+                    self.consumed_samples += len(sample_indices) * self.data_parallel_size
+                    yield sample_indices
         else:
             current_epoch_samples = self._calc_sample_offsets()
             g = torch.Generator()
