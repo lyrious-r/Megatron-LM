@@ -295,6 +295,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         self._dec_seq_len_buckets = dec_seq_len_buckets
         self._max_truncation_factor = max_truncation_factor
         self._min_truncation_seq_len = min_truncation_seq_len
+        self._shape_consumed_samples = consumed_samples
         if dynamic_batchsize:
             self._precalc_batches()
 
@@ -429,25 +430,29 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
         self._per_sample_seq_len_func = per_sample_seq_len_func
 
-    def _calc_sample_offsets(self):
+    def _calc_sample_offsets(self, is_data_iterator=True):
         active_total_samples = self.total_samples - self.last_batch_size
-        self.epoch = self.consumed_samples // active_total_samples
-        current_epoch_samples = self.consumed_samples % active_total_samples
+        if is_data_iterator:
+            self.epoch = self.consumed_samples // active_total_samples
+            if isinstance(self.dataset, RandomSeedDataset):
+                self.dataset.set_epoch(self.epoch)
+            current_epoch_samples = self.consumed_samples % active_total_samples
+            epoch = self.epoch
+        else:
+            current_epoch_samples = self._shape_consumed_samples % active_total_samples
+            epoch = self._shape_consumed_samples // active_total_samples
         assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
-
-        if isinstance(self.dataset, RandomSeedDataset):
-            self.dataset.set_epoch(self.epoch)
 
         if not self.data_sharding:
             print(
                 "WARNING: data sharding must be enabled for sorted sampler. Ignoring setting."
             )
-        return current_epoch_samples
+        return current_epoch_samples, epoch
 
-    def _dynamic_size_get_batch_order(self):
-        current_epoch_samples = self._calc_sample_offsets()
+    def _dynamic_size_get_batch_order(self, is_data_iterator=True):
+        current_epoch_samples, epoch = self._calc_sample_offsets(is_data_iterator=is_data_iterator)
         g = torch.Generator()
-        g.manual_seed(self.epoch)
+        g.manual_seed(epoch)
         n_batches = len(self._batches)
         batch_order = torch.randperm(n_batches, generator=g).tolist()
         cumulative_per_batch_samples = 0
@@ -464,13 +469,17 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
     def get_shape_iterator(self):
         if not self._dynamic_batchsize:
             return None
-        batch_order, batch_offset = self._dynamic_size_get_batch_order()
+
         def shape_generator():
             # generates (mbs, enc_seq_len, dec_seq_len) tuples
+            # need to call get_batch_order inside the generator to ensure
+            # that shape iterator is in sync with the data iterator upon reset
+            batch_order, batch_offset = self._dynamic_size_get_batch_order(is_data_iterator=False)
             for batch_id in batch_order[batch_offset:]:
                 batch = self._batches[batch_id]
                 batch_size = batch[1] - batch[0]
                 enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(batch[0])
+                self._shape_consumed_samples += batch_size * self.data_parallel_size
                 yield batch_size, enc_seq_len, dec_seq_len
         return ShapeIterator(shape_generator)
 
