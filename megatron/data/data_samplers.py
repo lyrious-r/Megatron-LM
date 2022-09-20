@@ -310,7 +310,10 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
     
     def n_micro_batches_per_epoch(self):
-        return len(self._batches)
+        if self._dynamic_batchsize:
+            return len(self._batches)
+        else:
+            return len(self.dataset) // (self.micro_batch_size * get_num_microbatches() * self.data_parallel_size)
 
     def _precalc_batches(self):
         assert self._dynamic_batchsize
