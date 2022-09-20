@@ -46,6 +46,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_size=mpu.get_data_parallel_world_size(),
         )
         shape_iterator = None
+        n_iters_per_epoch = len(dataset) // args.global_batch_size
     elif args.dataloader_type == "cyclic":
         batch_sampler = MegatronPretrainingRandomSampler(
             dataset,
@@ -57,6 +58,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_sharding=args.data_sharding,
         )
         shape_iterator = None
+        n_iters_per_epoch = len(dataset) // args.global_batch_size
     elif args.dataloader_type == "sorted":
         batch_sampler = MegatronPretrainingSortedSampler(
             dataset,
@@ -73,6 +75,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             min_truncation_seq_len=args.min_truncation_seq_len,
         )
         shape_iterator = batch_sampler.get_shape_iterator()
+        n_iters_per_epoch = batch_sampler.n_micro_batches_per_epoch() // (get_num_microbatches() * mpu.get_data_parallel_world_size())
     else:
         raise Exception(
             "{} dataloader type is not supported.".format(args.dataloader_type)
@@ -84,7 +87,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
         batch_sampler=batch_sampler,
         num_workers=args.num_workers,
         pin_memory=True,
-    ), shape_iterator
+    ), shape_iterator, n_iters_per_epoch
 
 
 class MegatronPretrainingSampler:
@@ -305,6 +308,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             self._precalc_batches()
         else:
             self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
+    
+    def n_micro_batches_per_epoch(self):
+        return len(self._batches)
 
     def _precalc_batches(self):
         assert self._dynamic_batchsize

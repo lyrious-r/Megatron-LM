@@ -549,6 +549,10 @@ def _add_training_args(parser):
                        help='Total number of iterations to train over all '
                        'training runs. Note that either train-iters or '
                        'train-samples should be provided.')
+    group.add_argument('--train-epochs', type=int, default=None,
+                       help='Total number of iterations to train over all '
+                       'training runs. Note that either train-iters or '
+                       'train-samples should be provided.')
     group.add_argument('--train-samples', type=int, default=None,
                        help='Total number of samples to train over all '
                        'training runs. Note that either train-iters or '

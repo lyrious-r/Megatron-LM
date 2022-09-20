@@ -139,10 +139,11 @@ def pretrain(train_valid_test_dataset_provider,
         valid_shape_iterator = [data_iterators[1][1] for data_iterators in all_data_iterators]
         test_data_iterator = [data_iterators[2][0] for data_iterators in all_data_iterators]
         test_shape_iterator = [data_iterators[2][1] for data_iterators in all_data_iterators]
+        n_iters_per_epoch = [data_iterators[3] for data_iterators in all_data_iterators]
     else:
         (train_data_iterator, train_shape_iterator), \
         (valid_data_iterator, valid_shape_iterator), \
-        (test_data_iterator, test_shape_iterator) \
+        (test_data_iterator, test_shape_iterator), n_iters_per_epoch \
             = build_train_valid_test_data_iterators(
                 train_valid_test_dataset_provider)
     timers('train/valid/test-data-iterators-setup').stop()
@@ -152,6 +153,11 @@ def pretrain(train_valid_test_dataset_provider,
     print_rank_0('done with setup ...')
     timers.log(['model-and-optimizer-setup', 'train/valid/test-data-iterators-setup'])
     print_rank_0('training ...')
+
+    if args.train_epochs is not None:
+        print_rank_0('training for {} epochs, overriding train_iters to {}'.format(args.train_epochs, n_iters_per_epoch))
+
+    args.train_iters = n_iters_per_epoch
 
     iteration = 0
     if args.do_train and args.train_iters > 0:
@@ -885,7 +891,7 @@ def build_train_valid_test_data_iterators(
     """XXX"""
     args = get_args()
 
-    (train_dataloader, valid_dataloader, test_dataloader) = (None, None, None)
+    (train_dataloader, valid_dataloader, test_dataloader, n_iters_per_epoch) = (None, None, None, None)
 
     print_rank_0('> building train, validation, and test datasets ...')
 
@@ -925,11 +931,11 @@ def build_train_valid_test_data_iterators(
             train_val_test_num_samples)
 
         # Build dataloders.
-        train_dataloader, train_shape_iterator = build_pretraining_data_loader(
+        train_dataloader, train_shape_iterator, n_iters_per_epoch = build_pretraining_data_loader(
             train_ds, args.consumed_train_samples)
-        valid_dataloader, valid_shape_iterator = build_pretraining_data_loader(
+        valid_dataloader, valid_shape_iterator, _ = build_pretraining_data_loader(
             valid_ds, args.consumed_valid_samples)
-        test_dataloader, test_shape_iterator = build_pretraining_data_loader(test_ds, 0)
+        test_dataloader, test_shape_iterator, _ = build_pretraining_data_loader(test_ds, 0)
 
         # Flags to know if we need to do training/validation/testing.
         do_train = train_dataloader is not None and args.train_iters > 0
@@ -989,4 +995,4 @@ def build_train_valid_test_data_iterators(
     else:
         test_shape_iterator = None
 
-    return (train_data_iterator, train_shape_iterator), (valid_data_iterator, valid_shape_iterator), (test_data_iterator, test_shape_iterator)
+    return (train_data_iterator, train_shape_iterator), (valid_data_iterator, valid_shape_iterator), (test_data_iterator, test_shape_iterator), n_iters_per_epoch
