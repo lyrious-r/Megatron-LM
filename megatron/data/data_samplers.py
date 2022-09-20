@@ -303,6 +303,8 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         self._shape_consumed_samples = consumed_samples
         if dynamic_batchsize:
             self._precalc_batches()
+        else:
+            self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
 
     def _precalc_batches(self):
         assert self._dynamic_batchsize
@@ -311,7 +313,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             seq_len_buckets = [
                 2**i
                 for i in range(
-                    5, int(np.ceil(np.log2(self.dataset.get_max_seq_len()))) + 1
+                    5, int(np.ceil(np.log2(self.dataset.get_max_seq_len_from_data()))) + 1
                 )
             ]
             self._seq_len_buckets = seq_len_buckets
@@ -521,11 +523,11 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                     self.consumed_samples += len(sample_indices) * self.data_parallel_size
                     yield sample_indices
         else:
-            current_epoch_samples = self._calc_sample_offsets()
+            current_epoch_samples, epoch = self._calc_sample_offsets()
             g = torch.Generator()
-            g.manual_seed(self.epoch)
+            g.manual_seed(epoch)
             # since we are using sorted dataset, data access is strided for each rank
-            stride_size_per_batch = self.micro_batch_size_times_data_parallel_size
+            stride_size_per_batch = self.micro_batch_times_data_parallel_size
             n_batches = self.total_samples // stride_size_per_batch
             bucket_offset = current_epoch_samples // self.data_parallel_size
             start_offset = self.data_parallel_rank

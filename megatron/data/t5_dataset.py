@@ -69,7 +69,7 @@ class T5Dataset(torch.utils.data.Dataset):
         self.sentinel_tokens = tokenizer.additional_special_tokens_ids
         assert len(self.sentinel_tokens) > 0, "Provide the argument --vocab-extra-ids 100 to the script"
 
-    def get_max_seq_len(self):
+    def get_max_seq_len_from_data(self):
         return min(np.max(self.samples_mapping[:, 2]), self.max_seq_length)
 
     def get_seq_len(self, idx):
@@ -82,6 +82,8 @@ class T5Dataset(torch.utils.data.Dataset):
         return self.samples_mapping.shape[0]
 
     def __getitem__(self, idx):
+        assert hasattr(self, 'per_sample_seq_len_func'), \
+            "set_per_sample_seq_len_func() must be called before __getitem__()"
         start_index, end_index, _ = self.samples_mapping[idx]
         bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
         sample = []
