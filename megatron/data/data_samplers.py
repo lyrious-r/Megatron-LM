@@ -275,6 +275,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         data_parallel_size,
         data_sharding,
         dynamic_batchsize=False,
+        dynamic_batch_level='batch',
         seq_len_buckets=None,
         dec_seq_len_buckets=None,
         microbatch_size_buckets=None,
@@ -290,6 +291,7 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             data_parallel_size,
             data_sharding,
         )
+        assert dynamic_batch_level == 'batch', 'Only batch level dynamic batching is supported'
         if not isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
             raise NotImplementedError(
                 "Only T5Dataset is supported for sorted sampler for now."

@@ -638,8 +638,33 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
     assert len(model) == 1
     model = model[0]
 
+    unwrapped_model = unwrap_model(
+        model, (torchDDP, LocalDDP, Float16Module))
+    model_type = unwrapped_model.model_type
+    rank = mpu.get_pipeline_model_parallel_rank()
+
+    send_tensor_shapes_per_mb = []
+    recv_tensor_shapes_per_mb = []
+
+    def append_dynamic_shapes(dynamic_shapes):
+        recv_tensor_shapes = get_tensor_shapes(rank-1, model_type, dynamic_shapes)
+        send_tensor_shapes = get_tensor_shapes(rank, model_type, dynamic_shapes)
+        send_tensor_shapes_per_mb.append(send_tensor_shapes)
+        recv_tensor_shapes_per_mb.append(recv_tensor_shapes)
+    
+    if shape_iterator is None:
+        num_microbatches = get_num_microbatches()
+        append_dynamic_shapes(None)
+    else:
+        # get the current micro batch size and calculate # micro batches
+        dynamic_shapes = next(shape_iterator)
+        # append this shape into the list
+        append_dynamic_shapes(dynamic_shapes)
+        current_micro_batch_size = dynamic_shapes[0]
+        assert args.global_batch_size % current_micro_batch_size == 0
+        num_microbatches = args.global_batch_size // current_micro_batch_size
+
     # Compute number of warmup microbatches.
-    num_microbatches = get_num_microbatches()
     num_warmup_microbatches = \
         (mpu.get_pipeline_model_parallel_world_size() -
          mpu.get_pipeline_model_parallel_rank() - 1)
@@ -648,23 +673,14 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
         num_microbatches)
     num_microbatches_remaining = \
         num_microbatches - num_warmup_microbatches
-
-    unwrapped_model = unwrap_model(
-        model, (torchDDP, LocalDDP, Float16Module))
-    model_type = unwrapped_model.model_type
-    rank = mpu.get_pipeline_model_parallel_rank()
-
-    send_tensor_shapes_per_mb = []
-    recv_tensor_shapes_per_mb = []
-    for _ in range(num_microbatches):
+    for _ in range(num_microbatches - 1):
+        # append the rest of the shapes
         if shape_iterator is not None:
             dynamic_shapes = next(shape_iterator)
         else:
             dynamic_shapes = None
-        recv_tensor_shapes = get_tensor_shapes(rank-1, model_type, dynamic_shapes)
-        send_tensor_shapes = get_tensor_shapes(rank, model_type, dynamic_shapes)
-        send_tensor_shapes_per_mb.append(send_tensor_shapes)
-        recv_tensor_shapes_per_mb.append(recv_tensor_shapes)
+        append_dynamic_shapes(dynamic_shapes)
+
     if args.dynamic_batch_level == "batch":
         # sanity check
         assert send_tensor_shapes_per_mb and all(send_tensor_shapes_per_mb[0] == elem for elem in send_tensor_shapes_per_mb)
