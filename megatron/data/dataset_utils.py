@@ -37,8 +37,9 @@ from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
 DSET_TYPE_BERT = 'standard_bert'
 DSET_TYPE_ICT = 'ict'
 DSET_TYPE_T5  = 't5'
+DSET_TYPE_T5_SUPERVISED = 't5_supervised'
 
-DSET_TYPES = [DSET_TYPE_BERT, DSET_TYPE_ICT, DSET_TYPE_T5]
+DSET_TYPES = [DSET_TYPE_BERT, DSET_TYPE_ICT, DSET_TYPE_T5, DSET_TYPE_T5_SUPERVISED]
 
 
 def get_datasets_weights_and_num_samples(data_prefix,
@@ -494,6 +495,12 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                              data_impl,
                                              skip_warmup)
 
+    if dataset_type == DSET_TYPE_T5_SUPERVISED:
+        args = get_args()
+        target_dataset = get_indexed_dataset_(args.targets_data_path,
+                                              data_impl,
+                                              skip_warmup)
+
     # Get start and end indices of train/valid/train into doc-idx
     # Note that doc-idx is desinged to be num-docs + 1 so we can
     # easily iterate over it.
@@ -520,7 +527,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
     def build_dataset(index, name):
         from megatron.data.bert_dataset import BertDataset
         from megatron.data.ict_dataset import ICTDataset
-        from megatron.data.t5_dataset import T5Dataset
+        from megatron.data.t5_dataset import T5UnsupervisedDataset, T5SupervisedDataset
         dataset = None
         if splits[index + 1] > splits[index]:
             # Get the pointer to the original doc-idx so we can set it later.
@@ -531,6 +538,9 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             end_index = splits[index + 1] + 1
             # New doc_idx view.
             indexed_dataset.set_doc_idx(doc_idx_ptr[start_index:end_index])
+            if dataset_type == DSET_TYPE_T5_SUPERVISED:
+                target_doc_idx_ptr = target_dataset.get_doc_idx()
+                target_dataset.set_doc_idx(target_doc_idx_ptr[start_index:end_index])
             # Build the dataset accordingly.
             kwargs = dict(
                 name=name,
@@ -540,7 +550,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                 max_seq_length=max_seq_length,
                 seed=seed,
             )
-            if dataset_type == DSET_TYPE_T5:
+            if dataset_type == DSET_TYPE_T5 or dataset_type == DSET_TYPE_T5_SUPERVISED:
                 kwargs["sort_samples"] = sort_samples
 
             if dataset_type == DSET_TYPE_ICT:
@@ -554,7 +564,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                     **kwargs
                 )
             elif dataset_type == DSET_TYPE_T5:
-                dataset = T5Dataset(
+                dataset = T5UnsupervisedDataset(
                     indexed_dataset=indexed_dataset,
                     masked_lm_prob=masked_lm_prob,
                     max_seq_length_dec=max_seq_length_dec,
@@ -569,15 +579,28 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                     binary_head=binary_head,
                     **kwargs
                 )
+            elif dataset_type == DSET_TYPE_T5_SUPERVISED:
+                dataset = T5SupervisedDataset(
+                    indexed_dataset=indexed_dataset,
+                    target_dataset=target_dataset,
+                    max_seq_length_dec=max_seq_length_dec,
+                    **kwargs
+                )
             else:
                 raise NotImplementedError("Dataset type not fully implemented.")
 
             # Set the original pointer so dataset remains the main dataset.
             indexed_dataset.set_doc_idx(doc_idx_ptr)
+            if dataset_type == DSET_TYPE_T5_SUPERVISED:
+                target_dataset.set_doc_idx(target_doc_idx_ptr)
             # Checks.
             assert indexed_dataset.doc_idx[0] == 0
             assert indexed_dataset.doc_idx.shape[0] == \
                 (total_num_of_documents + 1)
+            if dataset_type == DSET_TYPE_T5_SUPERVISED:
+                assert target_dataset.doc_idx[0] == 0
+                assert target_dataset.doc_idx.shape[0] == \
+                    (total_num_of_documents + 1)
         return dataset
 
     train_dataset = build_dataset(0, 'train')
@@ -724,3 +747,111 @@ def get_samples_mapping(indexed_dataset,
         samples_mapping.shape[0]))
 
     return samples_mapping
+
+def get_samples_mapping_supervised(
+                        indexed_dataset,
+                        target_indexed_dataset,
+                        data_prefix,
+                        num_epochs,
+                        max_num_samples,
+                        max_seq_length,
+                        max_seq_len_dec,
+                        seed,
+                        name,
+                        binary_head,
+                        sort_samples=False):
+    """Get a list that maps a sample index to a starting sentence index, end sentence index, and length"""
+
+    if not num_epochs:
+        if not max_num_samples:
+            raise ValueError("Need to specify either max_num_samples "
+                             "or num_epochs")
+        num_epochs = np.iinfo(np.int32).max - 1
+    if not max_num_samples:
+        max_num_samples = np.iinfo(np.int64).max - 1
+
+    # Filename of the index mapping
+    input_indexmap_filename = data_prefix
+    input_indexmap_filename += '_{}_input_indexmap'.format(name)
+    if num_epochs != (np.iinfo(np.int32).max - 1):
+        input_indexmap_filename += '_{}ep'.format(num_epochs)
+    if max_num_samples != (np.iinfo(np.int64).max - 1):
+        input_indexmap_filename += '_{}mns'.format(max_num_samples)
+    input_indexmap_filename += '_{}msl'.format(max_seq_length)
+    input_indexmap_filename += '_{}s'.format(seed)
+    input_indexmap_filename += '.npy'
+
+    target_indexmap_filename = data_prefix
+    target_indexmap_filename += '_{}_target_indexmap'.format(name)
+    if num_epochs != (np.iinfo(np.int32).max - 1):
+        target_indexmap_filename += '_{}ep'.format(num_epochs)
+    if max_num_samples != (np.iinfo(np.int64).max - 1):
+        target_indexmap_filename += '_{}mns'.format(max_num_samples)
+    target_indexmap_filename += '_{}msl'.format(max_seq_length)
+    target_indexmap_filename += '_{}s'.format(seed)
+    target_indexmap_filename += '.npy'
+
+    # Build the indexed mapping if not exist.
+    if torch.distributed.get_rank() == 0 and \
+       not os.path.isfile(input_indexmap_filename):
+        print(' > WARNING: could not find index map file {} and {}, building '
+              'the indices on rank 0 ...'.format(input_indexmap_filename, target_indexmap_filename))
+
+        # Make sure the types match the helpers input types.
+        assert indexed_dataset.doc_idx.dtype == np.int64
+        assert indexed_dataset.sizes.dtype == np.int32
+        assert target_indexed_dataset.doc_idx.dtype == np.int64
+        assert target_indexed_dataset.sizes.dtype == np.int32
+
+        # Build samples mapping
+        verbose = torch.distributed.get_rank() == 0
+        start_time = time.time()
+        print_rank_0(' > building samples index mapping for {} ...'.format(
+            name))
+        # First compile and then import.
+        from megatron.data import helpers
+        samples_mapping, target_samples_mapping = helpers.build_mapping_supervised(
+            indexed_dataset.doc_idx,
+            indexed_dataset.sizes,
+            target_indexed_dataset.doc_idx,
+            target_indexed_dataset.sizes,
+            num_epochs,
+            max_num_samples,
+            max_seq_length,
+            max_seq_len_dec,
+            seed,
+            verbose,
+            sort_samples)
+        print_rank_0(' > done building samples index maping')
+        np.save(input_indexmap_filename, samples_mapping, allow_pickle=True)
+        print_rank_0(' > saved the input index mapping in {}'.format(
+            input_indexmap_filename))
+        np.save(target_indexmap_filename, target_samples_mapping, allow_pickle=True)
+        print_rank_0(' > saved the target index mapping in {}'.format(
+            target_indexmap_filename))
+        # Make sure all the ranks have built the mapping
+        print_rank_0(' > elasped time to build and save samples mapping '
+                     '(seconds): {:4f}'.format(
+                         time.time() - start_time))
+    # This should be a barrier but nccl barrier assumes
+    # device_index=rank which is not the case for model
+    # parallel case
+    counts = torch.cuda.LongTensor([1])
+    torch.distributed.all_reduce(counts, group=mpu.get_data_parallel_group())
+    torch.distributed.all_reduce(counts, group=mpu.get_pipeline_model_parallel_group())
+    assert counts[0].item() == (
+        torch.distributed.get_world_size() //
+        torch.distributed.get_world_size(group=mpu.get_tensor_model_parallel_group()))
+
+    # Load indexed dataset.
+    print_rank_0(' > loading indexed mapping from {}'.format(
+        input_indexmap_filename))
+    start_time = time.time()
+    samples_mapping = np.load(input_indexmap_filename, allow_pickle=True, mmap_mode='r')
+    target_samples_mapping = np.load(target_indexmap_filename, allow_pickle=True, mmap_mode='r')
+    print_rank_0('    loaded indexed files in {:3.3f} seconds'.format(
+        time.time() - start_time))
+    print_rank_0('    total number of samples: {}'.format(
+        samples_mapping.shape[0]))
+
+    return samples_mapping, target_samples_mapping

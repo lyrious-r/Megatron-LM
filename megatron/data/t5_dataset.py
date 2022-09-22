@@ -23,10 +23,11 @@ import torch
 from megatron import get_tokenizer
 from megatron.data.dataset_utils import (
     create_masked_lm_predictions,
-    get_samples_mapping
+    get_samples_mapping,
+    get_samples_mapping_supervised
 )
 
-class T5Dataset(torch.utils.data.Dataset):
+class T5UnsupervisedDataset(torch.utils.data.Dataset):
 
     def __init__(self, name, indexed_dataset, data_prefix,
                  num_epochs, max_num_samples, masked_lm_prob,
@@ -103,6 +104,109 @@ class T5Dataset(torch.utils.data.Dataset):
                                      self.bos_id, self.eos_id,
                                      self.sentinel_tokens)
 
+class T5SupervisedDataset(torch.utils.data.Dataset):
+
+    def __init__(self, name, 
+                 input_indexed_dataset,
+                 target_indexed_dataset,
+                 data_prefix,
+                 num_epochs, max_num_samples,
+                 max_seq_length, max_seq_length_dec,
+                 seed, sort_samples=False):
+
+        # Params to store.
+        self.name = name
+        self.seed = seed
+        self.sorted = sort_samples
+        self.max_seq_length = max_seq_length
+        self.max_seq_length_dec = max_seq_length_dec
+        self.input_max_seq_length = -1
+        self.target_max_seq_length = -1
+        self.input_seq_lengths = None
+        self.target_seq_lengths = None
+
+        # Dataset.
+        self.input_indexed_dataset = input_indexed_dataset
+        self.target_indexed_dataset = target_indexed_dataset
+
+        # Build the samples mapping.
+        self.input_samples_mapping = get_samples_mapping_supervised(self.input_indexed_dataset,
+                                                            data_prefix,
+                                                            num_epochs,
+                                                            max_num_samples,
+                                                            self.max_seq_length - 2, # account for added tokens
+                                                            self.seed,
+                                                            self.name,
+                                                            False,
+                                                            sort_samples=sort_samples)
+        self.target_samples_mapping = get_samples_mapping_supervised(self.target_indexed_dataset,
+                                                                    data_prefix,
+                                                                    num_epochs,
+                                                                    max_num_samples,
+                                                                    self.max_seq_length_dec - 2, # account for added tokens
+                                                                    self.seed,
+                                                                    self.name,
+                                                                    False,
+                                                                    sort_samples=sort_samples)
+
+        # Vocab stuff.
+        tokenizer = get_tokenizer()
+        self.vocab_id_list = list(tokenizer.inv_vocab.keys())
+        self.vocab_id_to_token_dict = tokenizer.inv_vocab
+        self.cls_id = tokenizer.cls
+        self.sep_id = tokenizer.sep
+        self.mask_id = tokenizer.mask
+        self.pad_id = tokenizer.pad
+        self.bos_id = tokenizer.bos_token_id
+        self.eos_id = tokenizer.eos_token_id
+        self.sentinel_tokens = tokenizer.additional_special_tokens_ids
+        assert len(self.sentinel_tokens) > 0, "Provide the argument --vocab-extra-ids 100 to the script"
+
+    def get_max_seq_len_from_data(self):
+        return min(np.max(self.input_samples_mapping[:, 2]), self.max_seq_length)
+
+    def get_dec_max_seq_len_from_data(self):
+        return min(np.max(self.target_samples_mapping[:, 2]), self.max_seq_length_dec)
+
+    def get_seq_len(self, idx):
+        return self.input_samples_mapping[idx, 2]
+
+    def get_dec_seq_len(self, idx):
+        return self.target_samples_mapping[idx, 2]
+
+    def set_per_sample_seq_len_func(self, per_sample_seq_len_func):
+        self.per_sample_seq_len_func = per_sample_seq_len_func
+
+    def __len__(self):
+        return self.input_samples_mapping.shape[0]
+
+    def __getitem__(self, idx):
+        assert hasattr(self, 'per_sample_seq_len_func'), \
+            "set_per_sample_seq_len_func() must be called before __getitem__()"
+        input_start_index, input_end_index, _ = self.input_samples_mapping[idx]
+        target_start_index, target_end_index, _ = self.target_samples_mapping[idx]
+        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
+        input_sample = []
+        for index in range(input_start_index, input_end_index):
+            input_sample.append(self.input_indexed_dataset[index])
+        target_sample = []
+        for index in range(target_start_index, target_end_index):
+            target_sample.append(self.target_indexed_dataset[index])
+        # Note that this rng state should be numpy and not python since
+        # python randint is inclusive whereas the numpy one is exclusive.
+        np_rng = np.random.RandomState(seed=(self.seed + idx))
+        return build_supervised_training_sample(input_sample,
+                                     target_sample,
+                                     bucket_length,
+                                     dec_bucket_length - 2,
+                                     self.vocab_id_list,
+                                     self.vocab_id_to_token_dict,
+                                     self.cls_id, self.sep_id,
+                                     self.mask_id, self.pad_id,
+                                     np_rng,
+                                     self.bos_id, self.eos_id,
+                                     self.sentinel_tokens)
+
 
 def build_training_sample(sample, target_seq_length,
                           max_seq_length, max_seq_length_dec,
@@ -169,10 +273,72 @@ def build_training_sample(sample, target_seq_length,
     }
     return train_sample
 
+def build_supervised_training_sample(input_sample, target_sample, 
+                                    max_seq_length, max_seq_length_dec,
+                                    vocab_id_list, vocab_id_to_token_dict,
+                                    cls_id, sep_id, mask_id, pad_id,
+                                    np_rng, bos_id=None,
+                                    eos_id=None, sentinel_tokens=None):
+    """Build training sample.
+
+    Arguments:
+        sample: A list of sentences in which each sentence is a list token ids.
+        target_seq_length: Desired sequence length.
+        max_seq_length: Maximum length of the sequence. All values are padded to
+            this length.
+        vocab_id_list: List of vocabulary ids. Used to pick a random id.
+        vocab_id_to_token_dict: A dictionary from vocab ids to text tokens.
+        cls_id: Start of example id.
+        sep_id: Separator id.
+        mask_id: Mask token id.
+        pad_id: Padding token id.
+        masked_lm_prob: Probability to mask tokens.
+        np_rng: Random number genenrator. Note that this rng state should be
+              numpy and not python since python randint is inclusive for
+              the opper bound whereas the numpy one is exclusive.
+        bos_id: start of decoder example id
+        eos_id: end of generation id
+        sentinel_tokens: unique value to be substituted for every replaced span
+    """
+
+    # flatten sentences into one list
+    input_tokens = [token for sentence in input_sample for token in sentence]
+    target_tokens = [token for sentence in target_sample for token in sentence]
+
+    # Truncate to `max_seq_length`.
+    input_max_num_tokens = max_seq_length
+    input_truncated = len(input_tokens) > input_max_num_tokens
+    input_tokens = input_tokens[:input_max_num_tokens]
+
+    target_max_num_tokens = max_seq_length_dec
+    target_truncated = len(target_tokens) > target_max_num_tokens
+    target_tokens = target_tokens[:target_max_num_tokens]
+
+    # Padding.
+    tokens_enc, tokens_dec_in, labels, enc_mask, \
+    dec_mask, enc_dec_mask, loss_mask \
+        = pad_and_convert_to_numpy(input_tokens, [], [], pad_id, max_seq_length,
+                                   max_seq_length_dec, target_tokens, [],
+                                   bos_id, eos_id, sentinel_tokens)
+
+    train_sample = {
+        'text_enc': tokens_enc,
+        'text_dec': tokens_dec_in,
+        'labels': labels,
+        'loss_mask': loss_mask,
+        'input_truncated': int(input_truncated),
+        'target_truncated': int(target_truncated),
+        'enc_mask': enc_mask,
+        'dec_mask': dec_mask,
+        'enc_dec_mask': enc_dec_mask,
+    }
+    return train_sample
+
 
 def pad_and_convert_to_numpy(tokens, masked_positions,
                              masked_labels, pad_id,
                              max_seq_length, max_seq_length_dec,
+                             decoder_tokens = None,
                              masked_spans=None, bos_id=None,
                              eos_id=None, sentinel_tokens=None):
     """Pad sequences and convert them to numpy."""
@@ -181,21 +347,27 @@ def pad_and_convert_to_numpy(tokens, masked_positions,
     t5_input = []
     (t5_decoder_in, t5_decoder_out) = ([bos_id], [])
     (start_index, end_index) = (0, None)
-    for span in masked_spans:
-        flag = sentinel_tokens.popleft()
 
-        # Append the same tokens in decoder input and output
-        t5_decoder_in.append(flag)
-        t5_decoder_in.extend(span.label)
-        t5_decoder_out.append(flag)
-        t5_decoder_out.extend(span.label)
+    if decoder_tokens is not None:
+        assert len(masked_positions) == len(masked_labels) == 0
+        t5_decoder_in.extend(decoder_tokens)
+        t5_decoder_out.extend(decoder_tokens)
+    else:
+        for span in masked_spans:
+            flag = sentinel_tokens.popleft()
 
-        end_index = span.index[0]
-        t5_input.extend(tokens[start_index: end_index])
-        t5_input.append(flag)
+            # Append the same tokens in decoder input and output
+            t5_decoder_in.append(flag)
+            t5_decoder_in.extend(span.label)
+            t5_decoder_out.append(flag)
+            t5_decoder_out.extend(span.label)
 
-        # the next start index is the token after the last span token
-        start_index = span.index[-1] + 1
+            end_index = span.index[0]
+            t5_input.extend(tokens[start_index: end_index])
+            t5_input.append(flag)
+
+            # the next start index is the token after the last span token
+            start_index = span.index[-1] + 1
 
     # Add <eos> token to the t5_decoder_out
     t5_decoder_out.append(eos_id)

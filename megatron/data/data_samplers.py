@@ -21,10 +21,11 @@ import bisect
 import torch
 import numpy as np
 from torch.utils.data import Dataset
-from megatron import get_args, microbatches
+from megatron import get_args
 from megatron import mpu
 from megatron import get_num_microbatches
-from megatron.data.t5_dataset import T5Dataset
+from megatron.utils import print_rank_0
+from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
 
 from plopt.memory_utils import InvTransformerMemoryModel
 
@@ -75,7 +76,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             min_truncation_seq_len=args.min_truncation_seq_len,
         )
         shape_iterator = batch_sampler.get_shape_iterator()
-        n_iters_per_epoch = batch_sampler.n_micro_batches_per_epoch() // (get_num_microbatches() * mpu.get_data_parallel_world_size())
+        n_iters_per_epoch = batch_sampler.n_iters_per_epoch()
     else:
         raise Exception(
             "{} dataloader type is not supported.".format(args.dataloader_type)
@@ -274,9 +275,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         data_parallel_size,
         data_sharding,
         dynamic_batchsize=False,
-        dynamic_batch_level="batch",
         seq_len_buckets=None,
         dec_seq_len_buckets=None,
+        microbatch_size_buckets=None,
         max_truncation_factor=0.05,
         min_truncation_seq_len=512,
     ):
@@ -289,34 +290,61 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             data_parallel_size,
             data_sharding,
         )
-        if not isinstance(dataset, T5Dataset):
+        if not isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
             raise NotImplementedError(
                 "Only T5Dataset is supported for sorted sampler for now."
             )
         assert (
             hasattr(dataset, "sorted") and dataset.sorted
         ), "Dataset should be sorted for sorted sampler."
-        self._n_microbatches_per_global_batch = get_num_microbatches()
+        self._global_batch_size_per_rank = get_num_microbatches() * self.micro_batch_size
+        self._global_batch_size = self._global_batch_size_per_rank * self.data_parallel_size
         self._dynamic_batchsize = dynamic_batchsize
-        self._dynamic_batch_level = dynamic_batch_level
         self._seq_len_buckets = seq_len_buckets
         self._dec_seq_len_buckets = dec_seq_len_buckets
+        self._microbatch_size_buckets = microbatch_size_buckets
         self._max_truncation_factor = max_truncation_factor
         self._min_truncation_seq_len = min_truncation_seq_len
         self._shape_consumed_samples = consumed_samples
+        self._is_supervised_dataset = isinstance(dataset, T5SupervisedDataset)
         if dynamic_batchsize:
             self._precalc_batches()
         else:
             self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
     
-    def n_micro_batches_per_epoch(self):
+    def _round_mbs(self, target_mbs):
+        mbs_bucket_idx = bisect.bisect_right(self._microbatch_size_buckets, target_mbs) - 1
+        if mbs_bucket_idx < 1:
+            mbs_bucket_idx = 1
+        rounded_mbs = self._microbatch_size_buckets[mbs_bucket_idx]
+        return rounded_mbs
+    
+    def _get_seq_len_bucket_idx(self, seq_len, decoder=False):
+        buckets = self._seq_len_buckets if not decoder else self._dec_seq_len_buckets
+        bucket_idx = bisect.bisect_left(buckets, seq_len)
+        if bucket_idx == len(buckets):
+            bucket_idx -= 1
+        if not decoder:
+            # see if seq_len is within truncation factor of the previous bucket
+            if bucket_idx > 1 and seq_len > self._min_truncation_seq_len:
+                prev_bucket_seq_len = buckets[bucket_idx - 1]
+                if seq_len <= prev_bucket_seq_len * (1 + self._max_truncation_factor):
+                    bucket_idx -= 1
+        return bucket_idx
+
+    def _n_microbatches_per_global_batch(self, mbs):
+        return self._global_batch_size_per_rank // mbs
+
+    def n_iters_per_epoch(self):
         if self._dynamic_batchsize:
             return len(self._batches)
         else:
-            return len(self.dataset) // self.micro_batch_size
+            return len(self.dataset) // self._global_batch_size
 
     def _precalc_batches(self):
         assert self._dynamic_batchsize
+
+        # calculate buckets if not provided
         if not self._seq_len_buckets:
             # from 32 to max seq len
             seq_len_buckets = [
@@ -328,8 +356,12 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             self._seq_len_buckets = seq_len_buckets
         if not self._dec_seq_len_buckets:
             self._dec_seq_len_buckets = self._seq_len_buckets
-        self._per_seq_len_mbs = [-1] * len(self._seq_len_buckets)
+        if not self._microbatch_size_buckets:
+            self._microbatch_size_buckets = [1, 2, 4] + [8 * i for i in range(self._global_batch_size_per_rank // 8 + 1)]
+        self._microbatch_size_buckets = [x for x in self._microbatch_size_buckets if self._global_batch_size_per_rank % x == 0]
+
         # calculate mbs and broadcast to all dp and pp ranks
+        self._per_seq_len_mbs = [-1] * len(self._seq_len_buckets)
         if mpu.get_data_parallel_rank() == 0:
             args = get_args()
             if args.memory_model == "plopt":
@@ -348,10 +380,10 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 )
                 inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
                 for idx, seq_len in enumerate(self._seq_len_buckets):
-                    self._per_seq_len_mbs[idx] = inv_mem_model.get_microbatch_size(seq_len)
+                    self._per_seq_len_mbs[idx] = self._round_mbs(inv_mem_model.get_microbatch_size(seq_len))
             else:
                 for idx, seq_len in enumerate(self._seq_len_buckets):
-                    self._per_seq_len_mbs[idx] = (self.micro_batch_size * args.encoder_seq_length) // seq_len
+                    self._per_seq_len_mbs[idx] = self._round_mbs((self.micro_batch_size * args.encoder_seq_length) // seq_len)
         # broadcast
         buffer = torch.cuda.IntTensor(self._per_seq_len_mbs)
         torch.distributed.broadcast(
@@ -366,29 +398,17 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         )
         self._per_seq_len_mbs = buffer.tolist()
 
+        # calculate the starting sample index for each sequence length bucket
         self._per_seq_len_bucket_start_indices = [-1] * len(self._seq_len_buckets)
         for i in range(self.total_samples):
             seq_len = self.dataset.get_seq_len(i)
-            bucket_idx = bisect.bisect_left(self._seq_len_buckets, seq_len)
-            if bucket_idx == len(self._seq_len_buckets):
-                bucket_idx -= 1
-            # see if seq_len is within truncation factor of the previous bucket
-            if bucket_idx > 1 and seq_len > self._min_truncation_seq_len:
-                prev_bucket_seq_len = self._seq_len_buckets[bucket_idx - 1]
-                if seq_len <= prev_bucket_seq_len * (1 + self._max_truncation_factor):
-                    bucket_idx -= 1
+            bucket_idx = self._get_seq_len_bucket_idx(seq_len)
             if self._per_seq_len_bucket_start_indices[bucket_idx] == -1:
                 self._per_seq_len_bucket_start_indices[bucket_idx] = i
         # adjust start indices so each bucket's number of samples is a multiple of
         # effective batch size
-        effective_batch_size_multiplier = self.data_parallel_size
-        if self._dynamic_batch_level == "batch":
-            effective_batch_size_multiplier *= self._n_microbatches_per_global_batch
         self._per_seq_len_bucket_num_samples = [0] * len(self._seq_len_buckets)
         for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
-            total_batch_size = (
-                self._per_seq_len_mbs[bucket_idx] * effective_batch_size_multiplier
-            )
             if start_idx == -1:
                 continue
             next_bucket_start_idx = -1
@@ -400,56 +420,72 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
                 num_current_bucket_samples = self.total_samples - start_idx
             else:
                 num_current_bucket_samples = next_bucket_start_idx - start_idx
-            num_batches = num_current_bucket_samples // total_batch_size
-            end_idx = start_idx + num_batches * total_batch_size
+            num_batches = num_current_bucket_samples // self._global_batch_size
+            end_idx = start_idx + num_batches * self._global_batch_size
             self._per_seq_len_bucket_num_samples[bucket_idx] = (
-                num_batches * total_batch_size
+                num_batches * self._global_batch_size
             )
             if bucket_idx != len(self._seq_len_buckets) - 1:
                 self._per_seq_len_bucket_start_indices[bucket_idx + 1] = end_idx
         adusted_total_samples = sum(self._per_seq_len_bucket_num_samples)
         self.last_batch_size = self.total_samples - adusted_total_samples
+        print_rank_0("INFO: adjusted total samples from {} to {}. Data wasted: {} ({:.2f}%).".format(self.total_samples, adusted_total_samples, self.last_batch_size, self.last_batch_size / self.total_samples * 100))
         # now we have the start indices and number of samples for each bucket
         # we can precalculate the batches
         self._batches = []
         for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
             if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
+                num_global_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
                 per_rank_samples = (
                     self._per_seq_len_bucket_num_samples[bucket_idx]
                     // self.data_parallel_size
                 )
                 start_offset = start_idx + self.data_parallel_rank * per_rank_samples
-                n_microbatches = per_rank_samples // self._per_seq_len_mbs[bucket_idx]
-                for mb_idx in range(n_microbatches):
-                    self._batches.append(
-                        (
-                            start_offset + mb_idx * self._per_seq_len_mbs[bucket_idx],
-                            start_offset + (mb_idx + 1) * self._per_seq_len_mbs[bucket_idx],
-                        )
-                    )
+                n_microbatches_per_global_batch = self._n_microbatches_per_global_batch(self._per_seq_len_mbs[bucket_idx])
+                for gb in range(num_global_batches):
+                    microbatch = []
+                    for mb in range(n_microbatches_per_global_batch):
+                        start_idx = start_offset + gb * self._global_batch_size + mb * self._per_seq_len_mbs[bucket_idx]
+                        microbatch.append((start_idx, start_idx + self._per_seq_len_mbs[bucket_idx]))
+                    self._batches.append(microbatch)
+        # calculate per global batch decoder seq length
+        self._per_global_batch_decoder_seq_len = [] # 2D list [bucket, global_batch]
+        for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
+            if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
+                per_batch_seq_lens = []
+                num_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
+                for i in range(num_batches):
+                    start_offset = start_idx + i * self._global_batch_size
+                    end_offset = start_offset + self._global_batch_size
+                    max_seq_len = 0
+                    for sample_idx in range(start_offset, end_offset):
+                        if self._is_supervised_dataset:
+                            dec_seq_len = self.dataset.get_dec_seq_len(sample_idx)
+                        else:
+                            dec_seq_len = self.dataset.get_seq_len(sample_idx) * self.dataset.masked_lm_prob + 2
+                        max_seq_len = max(dec_seq_len, max_seq_len)
+                    per_batch_seq_lens.append(max_seq_len)
+                self._per_global_batch_decoder_seq_len.append(per_batch_seq_lens)
         # set per sample seq len func for dataset
-        seq_len_start_indices = []
-        enc_dec_seq_lengths = []
+        per_global_batch_enc_dec_seq_lengths = []
+        global_batch_id = 0
         for start_idx, size, seq_len in zip(
             self._per_seq_len_bucket_start_indices,
             self._per_seq_len_bucket_num_samples,
             self._seq_len_buckets,
         ):
             if size > 0:
-                dec_seq_len = seq_len * self.dataset.masked_lm_prob
-                dec_bucket_idx = bisect.bisect_left(
-                    self._dec_seq_len_buckets, dec_seq_len
-                )
-                if dec_bucket_idx >= len(self._dec_seq_len_buckets):
-                    dec_bucket_idx -= 1
-                dec_seq_len = self._dec_seq_len_buckets[dec_bucket_idx]
-                seq_len_start_indices.append(start_idx)
-                enc_dec_seq_lengths.append((seq_len, dec_seq_len))
+                num_global_batches = size // self._global_batch_size
+                for _ in range(num_global_batches):
+                    dec_seq_len = self._per_global_batch_decoder_seq_len[global_batch_id]
+                    dec_bucket_idx = self._get_seq_len_bucket_idx(dec_seq_len, decoder=True)
+                    dec_seq_len = self._dec_seq_len_buckets[dec_bucket_idx]
+                    per_global_batch_enc_dec_seq_lengths.append((seq_len, dec_seq_len))
+                    global_batch_id += 1
 
         def per_sample_seq_len_func(idx):
-            bucket_idx = bisect.bisect_right(seq_len_start_indices, idx) - 1
-            assert bucket_idx >= 0
-            return enc_dec_seq_lengths[bucket_idx][0], enc_dec_seq_lengths[bucket_idx][1]
+            global_batch_id = idx // self._global_batch_size
+            return per_global_batch_enc_dec_seq_lengths[global_batch_id]
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
         self._per_sample_seq_len_func = per_sample_seq_len_func
 
@@ -476,23 +512,15 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         current_epoch_samples, epoch = self._calc_sample_offsets(is_data_iterator=is_data_iterator)
         g = torch.Generator()
         g.manual_seed(epoch)
-        if self._dynamic_batch_level == "batch":
-            n_batches = len(self._batches) // self._n_microbatches_per_global_batch
-        else:
-            n_batches = len(self._batches)
-        batch_order = torch.randperm(n_batches, generator=g).tolist()
-        cumulative_per_batch_samples = 0
+        n_global_batches = len(self._batches)
+        batch_order = torch.randperm(n_global_batches, generator=g).tolist()
+        cumulative_samples = 0
         for batch_offset in range(len(batch_order)):
-            if self._dynamic_batch_level == "batch":
-                batch_ids = list(range(batch_offset * self._n_microbatches_per_global_batch, 
-                                       (batch_offset + 1) * self._n_microbatches_per_global_batch))
-            else:
-                batch_ids =  [batch_offset]
-            if cumulative_per_batch_samples < current_epoch_samples:
-                for batch_id in batch_ids:
-                    batch = self._batches[batch_id]
-                    cumulative_per_batch_samples += (
-                        batch[1] - batch[0]
+            microbatches = self._batches[batch_offset]
+            if cumulative_samples < current_epoch_samples:
+                for microbatch in microbatches:
+                    cumulative_samples += (
+                        microbatch[1] - microbatch[0]
                     ) * self.data_parallel_size
             else:
                 break
@@ -508,15 +536,10 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
             # that shape iterator is in sync with the data iterator upon reset
             batch_order, batch_offset = self._dynamic_size_get_batch_order(is_data_iterator=False)
             for batch_id in batch_order[batch_offset:]:
-                if self._dynamic_batch_level == "batch":
-                    microbatches = range(batch_id * self._n_microbatches_per_global_batch,
-                                         (batch_id + 1) * self._n_microbatches_per_global_batch)
-                else:
-                    microbatches = [batch_id]
+                microbatches = self._batches[batch_id]
                 for mb in microbatches:
-                    batch = self._batches[mb]
-                    batch_size = batch[1] - batch[0]
-                    enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(batch[0])
+                    batch_size = mb[1] - mb[0]
+                    enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(mb[0])
                     self._shape_consumed_samples += batch_size * self.data_parallel_size
                     yield batch_size, enc_seq_len, dec_seq_len
         return ShapeIterator(shape_generator)
@@ -525,14 +548,9 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         if self._dynamic_batchsize:
             batch_order, batch_offset = self._dynamic_size_get_batch_order()
             for batch_id in batch_order[batch_offset:]:
-                if self._dynamic_batch_level == "batch":
-                    microbatches = range(batch_id * self._n_microbatches_per_global_batch,
-                                         (batch_id + 1) * self._n_microbatches_per_global_batch)
-                else:
-                    microbatches = [batch_id]
+                microbatches = self._batches[batch_id]
                 for mb in microbatches:
-                    batch = self._batches[mb]
-                    sample_indices = [idx for idx in range(batch[0], batch[1])]
+                    sample_indices = [idx for idx in range(mb[0], mb[1])]
                     self.consumed_samples += len(sample_indices) * self.data_parallel_size
                     yield sample_indices
         else:

@@ -442,6 +442,229 @@ py::array build_mapping_impl(const py::array_t<int64_t> &docs_,
                    free_when_done);             // numpy array references
 }
 
+template <typename DocIdx>
+std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t<int64_t> &docs_,
+                                  const py::array_t<int32_t> &sizes_,
+                                  const py::array_t<int64_t> &target_docs_,
+                                  const py::array_t<int32_t> &target_sizes_,
+                                  const int32_t num_epochs,
+                                  const uint64_t max_num_samples,
+                                  const int32_t max_seq_length,
+                                  const int32_t max_seq_length_dec,
+                                  const int32_t seed,
+                                  const bool verbose,
+                                  const bool sort_samples) {
+  /* Build a mapping of (start-index, end-index, sequence-length) where
+     start and end index are the indices of the sentences in the sample
+     and sequence-length is the target sequence length.
+  */
+
+  // Consistency checks.
+  assert(num_epochs > 0);
+  assert(max_seq_length > 1);
+  assert(seed > 0);
+
+  // Remove bound checks.
+  auto docs = docs_.unchecked<1>();
+  auto sizes = sizes_.unchecked<1>();
+  auto target_docs = target_docs_.unchecked<1>();
+  auto target_sizes = target_sizes_.unchecked<1>();
+
+  assert(docs_.shape(0) == target_docs_.shape(0));
+
+  if (verbose) {
+    const auto input_sent_start_index = docs[0];
+    const auto input_sent_end_index = docs[docs_.shape(0) - 1];
+    const auto target_sent_start_index = target_docs[0];
+    const auto target_sent_end_index = target_docs[target_docs_.shape(0) - 1];
+    const auto input_num_sentences = input_sent_end_index - input_sent_start_index;
+    const auto target_num_sentences = target_sent_end_index - target_sent_start_index;
+    cout << "    using:" << endl << std::flush;
+    cout << "     number of documents:              " << docs_.shape(0) - 1
+         << endl
+         << std::flush;
+    cout << "     Input sentences range:           [" << input_sent_start_index << ", "
+         << input_sent_end_index << ")" << endl
+         << std::flush;
+    cout << "     Target sentences range:          [" << target_sent_start_index << ", "
+         << target_sent_end_index << ")" << endl
+         << std::flush;
+    cout << "     total number of input sentences:  " << input_num_sentences << endl
+         << std::flush;
+    cout << "     total number of target sentences: " << target_num_sentences << endl
+         << std::flush;
+    cout << "     number of epochs:                 " << num_epochs << endl
+         << std::flush;
+    cout << "     maximum number of samples:        " << max_num_samples << endl
+         << std::flush;
+    cout << "     maximum sequence length:          " << max_seq_length << endl
+         << std::flush;
+    cout << "     maximum sequence length decoder:  " << max_seq_length_dec << endl
+         << std::flush;
+    cout << "     seed:                             " << seed << endl
+         << std::flush;
+  }
+
+  // Mapping and it's length (1D).
+  int64_t num_samples = -1;
+  DocIdx *input_maps = NULL;
+  DocIdx *target_maps = NULL;
+
+  // Perform two iterations, in the first iteration get the size
+  // and allocate memory and in the second iteration populate the map.
+  bool second = false;
+  for (int32_t iteration = 0; iteration < 2; ++iteration) {
+    // Set the seed so both iterations produce the same results.
+    std::mt19937 rand32_gen(seed);
+
+    // Set the flag on second iteration.
+    second = (iteration == 1);
+
+    // Current map index.
+    uint64_t map_index = 0;
+
+    // For each epoch:
+    for (int32_t epoch = 0; epoch < num_epochs; ++epoch) {
+      if (map_index >= max_num_samples) {
+        if (verbose && (!second)) {
+          cout << "    reached " << max_num_samples << " samples after "
+               << epoch << " epochs ..." << endl
+               << std::flush;
+        }
+        break;
+      }
+      // For each document:
+      for (int32_t doc = 0; doc < (docs.shape(0) - 1); ++doc) {
+        // Document sentences are in [sent_index_first, sent_index_last)
+        const auto input_sent_index_first = docs[doc];
+        const auto input_sent_index_last = docs[doc + 1];
+        const auto target_sent_index_first = target_docs[doc];
+        const auto target_sent_index_last = target_docs[doc + 1];
+
+        // Set values.
+        auto input_seq_len = int32_t{0};
+        auto target_seq_len = int32_t{0};
+
+        // Loop through sentences.
+        for (auto sent_index = input_sent_index_first; sent_index < input_sent_index_last;
+              ++sent_index) {
+          // Add the size and number of sentences.
+          input_seq_len += sizes[sent_index];
+        }
+        for (auto sent_index = target_sent_index_first; sent_index < target_sent_index_last;
+              ++sent_index) {
+          // Add the size and number of sentences.
+          target_seq_len += target_sizes[sent_index];
+        }
+
+        // If we have reached the target length.
+        // and if not only one sentence is left in the document.
+        // and if we have at least two sentneces.
+        // and if we have reached end of the document.
+        // Check for overflow.
+        if ((3 * map_index + 2) > std::numeric_limits<int64_t>::max()) {
+          cout << "number of samples exceeded maximum "
+                << "allowed by type int64: "
+                << std::numeric_limits<int64_t>::max() << endl;
+          throw std::overflow_error("Number of samples");
+        }
+
+        // Populate the map.
+        if (second) {
+          const auto map_index_0 = 3 * map_index;
+          input_maps[map_index_0] = static_cast<DocIdx>(input_sent_index_first);
+          input_maps[map_index_0 + 1] = static_cast<DocIdx>(input_sent_index_last);
+          input_maps[map_index_0 + 2] = static_cast<DocIdx>(input_seq_len);
+          target_maps[map_index_0] = static_cast<DocIdx>(target_sent_index_first);
+          target_maps[map_index_0 + 1] = static_cast<DocIdx>(target_sent_index_last);
+          target_maps[map_index_0 + 2] = static_cast<DocIdx>(target_seq_len);
+        }
+
+        // Update indices / counters.
+        ++map_index;
+      }      // for (int doc=0; doc < num_docs; ++doc) {
+    }        // for (int epoch=0; epoch < num_epochs; ++epoch) {
+
+    if (!second) {
+      if (verbose) {
+        cout << "   will create mapping for " << map_index << " samples" << endl
+             << std::flush;
+      }
+      assert(input_maps == NULL);
+      assert(target_maps == NULL);
+      assert(num_samples < 0);
+      input_maps = new DocIdx[3 * map_index];
+      target_maps = new DocIdx[3 * map_index];
+      num_samples = static_cast<int64_t>(map_index);
+    }
+
+  }  // for (int iteration=0; iteration < 2; ++iteration) {
+
+  if (sort_samples) {
+    // Sort the dataset by input sequence length
+    using SamplePair = std::tuple<DocIdx, DocIdx, DocIdx, DocIdx, DocIdx, DocIdx>;
+    std::vector<SamplePair> idx_maps;
+    for (int64_t i = 0; i < num_samples; ++i) {
+      idx_maps.push_back(std::make_tuple(maps[3 * i], maps[3 * i + 1],
+                                         maps[3 * i + 2], target_maps[3 * i],
+                                         target_maps[3 * i + 1], target_maps[3 * i + 2]));
+    }
+    // sort based on input sequence length, and then on target sequence length
+    std::sort(idx_maps.begin(), idx_maps.end(),
+              [](const SamplePair &a,
+                 const SamplePair &b) {
+                if (std::get<2>(a) == std::get<2>(b)) {
+                  return std::get<5>(a) < std::get<5>(b);
+                } else {
+                  return std::get<2>(a) < std::get<2>(b);
+                }
+              });
+    // Copy back to maps
+    for (int64_t i = 0; i < num_samples; ++i) {
+      maps[3 * i] = std::get<0>(idx_maps[i]);
+      maps[3 * i + 1] = std::get<1>(idx_maps[i]);
+      maps[3 * i + 2] = std::get<2>(idx_maps[i]);
+      target_maps[3 * i] = std::get<3>(idx_maps[i]);
+      target_maps[3 * i + 1] = std::get<4>(idx_maps[i]);
+      target_maps[3 * i + 2] = std::get<5>(idx_maps[i]);
+    }
+  } else {
+    // Shuffle.
+    // We need a 64 bit random number generator as we might have more
+    // than 2 billion samples.
+    std::mt19937_64 rand64_gen(seed + 1);
+    for (auto i = (num_samples - 1); i > 0; --i) {
+      const auto j = static_cast<int64_t>(rand64_gen() % (i + 1));
+      const auto i0 = 3 * i;
+      const auto j0 = 3 * j;
+      // Swap values.
+      swap(maps[i0], maps[j0]);
+      swap(maps[i0 + 1], maps[j0 + 1]);
+      swap(maps[i0 + 2], maps[j0 + 2]);
+      swap(target_maps[i0], target_maps[j0]);
+      swap(target_maps[i0 + 1], target_maps[j0 + 1]);
+      swap(target_maps[i0 + 2], target_maps[j0 + 2]);
+    }
+  }
+
+  // Method to deallocate memory.
+  py::capsule free_when_done(maps, [](void *mem_) {
+    DocIdx *mem = reinterpret_cast<DocIdx *>(mem_);
+    delete[] mem;
+  });
+
+  // Return the numpy array.
+  const auto byte_size = sizeof(DocIdx);
+  return std::make_tuple(py::array(std::vector<int64_t>{num_samples, 3},  // shape
+                                  {3 * byte_size, byte_size},  // C-style contiguous strides
+                                  maps,                        // the data pointer
+                                  free_when_done),             // numpy array references
+                          py::array(std::vector<int64_t>{num_samples, 3},  // shape
+                                    {3 * byte_size, byte_size},  // C-style contiguous strides
+                                    target_maps,                 // the data pointer
+                                    free_when_done));            // numpy array references
+}
+
 py::array build_mapping(const py::array_t<int64_t> &docs_,
                         const py::array_t<int> &sizes_, const int num_epochs,
                         const uint64_t max_num_samples,
@@ -462,6 +685,33 @@ py::array build_mapping(const py::array_t<int64_t> &docs_,
     return build_mapping_impl<uint32_t>(
         docs_, sizes_, num_epochs, max_num_samples, max_seq_length,
         short_seq_prob, seed, verbose, min_num_sent, sort_samples);
+  }
+}
+
+std::tuple<py::array, py::array> build_mapping_supervised(const py::array_t<int64_t> &docs_,
+                        const py::array_t<int> &sizes_,
+                        const py::array_t<int64_t> &target_docs_,
+                        const py::array_t<int> &target_sizes_,
+                        const int num_epochs,
+                        const uint64_t max_num_samples,
+                        const int max_seq_length,
+                        const int max_seq_length_dec,
+                        const int seed, const bool verbose,
+                        const bool sort_samples) {
+  if (sizes_.size() > std::numeric_limits<uint32_t>::max()) {
+    if (verbose) {
+      cout << "    using uint64 for data mapping..." << endl << std::flush;
+    }
+    return build_mapping_supervised_impl<uint64_t>(
+        docs_, sizes_, target_docs_, target_sizes_, num_epochs, max_num_samples, max_seq_length,
+        max_seq_length_dec, seed, verbose, sort_samples);
+  } else {
+    if (verbose) {
+      cout << "    using uint32 for data mapping..." << endl << std::flush;
+    }
+    return build_mapping_supervised_impl<uint32_t>(
+        docs_, sizes_, target_docs_, target_sizes_, num_epochs, max_num_samples, max_seq_length,
+        max_seq_length_dec, seed, verbose, sort_samples);
   }
 }
 
@@ -704,6 +954,7 @@ py::array build_blocks_mapping(
 
 PYBIND11_MODULE(helpers, m) {
   m.def("build_mapping", &build_mapping);
+  m.def("build_mapping_supervised", &build_mapping_supervised);
   m.def("build_blocks_mapping", &build_blocks_mapping);
   m.def("build_sample_idx", &build_sample_idx);
   m.def("build_blending_indices", &build_blending_indices);
