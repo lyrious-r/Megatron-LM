@@ -610,7 +610,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             return None
 
         def shape_generator():
-            # generates (mbs, enc_seq_len, dec_seq_len) tuples
+            # generates (num_microbatches, mbs, enc_seq_len, dec_seq_len) tuples
             # need to call get_batch_order inside the generator to ensure
             # that shape iterator is in sync with the data iterator upon reset
             batch_order, batch_offset = self._dynamic_size_get_batch_order(is_data_iterator=False)
@@ -620,7 +620,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                     batch_size = mb[1] - mb[0]
                     enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(mb[0])
                     self._shape_consumed_samples += batch_size * self.data_parallel_size
-                    yield batch_size, enc_seq_len, dec_seq_len
+                    yield len(microbatches), batch_size, enc_seq_len, dec_seq_len
         return ShapeIterator(shape_generator)
 
     def __iter__(self):

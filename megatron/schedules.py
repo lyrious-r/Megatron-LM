@@ -657,12 +657,13 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
         append_dynamic_shapes(None)
     else:
         # get the current micro batch size and calculate # micro batches
-        dynamic_shapes = next(shape_iterator)
+        num_microbatches, mbs, enc_seq_len, dec_seq_len = next(shape_iterator)
+        dynamic_shapes = mbs, enc_seq_len, dec_seq_len
         # append this shape into the list
         append_dynamic_shapes(dynamic_shapes)
         current_micro_batch_size = dynamic_shapes[0]
-        assert args.global_batch_size % current_micro_batch_size == 0
-        num_microbatches = args.global_batch_size // current_micro_batch_size
+        # assert args.global_batch_size % current_micro_batch_size == 0
+        # num_microbatches = args.global_batch_size // current_micro_batch_size
 
     # Compute number of warmup microbatches.
     num_warmup_microbatches = \
@@ -676,7 +677,8 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
     for _ in range(num_microbatches - 1):
         # append the rest of the shapes
         if shape_iterator is not None:
-            dynamic_shapes = next(shape_iterator)
+            _, mbs, enc_seq_len, dec_seq_len = next(shape_iterator)
+            dynamic_shapes = mbs, enc_seq_len, dec_seq_len
         else:
             dynamic_shapes = None
         append_dynamic_shapes(dynamic_shapes)
