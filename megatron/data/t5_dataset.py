@@ -27,17 +27,61 @@ from megatron.data.dataset_utils import (
     get_samples_mapping_supervised
 )
 
+def pack_samples(input_samples_mapping, max_seq_len_input,
+                  target_samples_mapping=None, max_seq_len_target=None):
+    """Pack multiple samples into a single sequence."""
+    # each sample is a list of tuples (start_idx, end_idx, seq_len)
+    input_samples = []
+    target_samples = []
+    if target_samples_mapping is not None:
+        assert len(input_samples_mapping) == len(target_samples_mapping), \
+            "input and target samples mapping should have the same length"
+    curr_input_seq_len = 0
+    curr_target_seq_len = 0
+    curr_input_sequence = []
+    curr_target_sequence = []
+    for idx in range(len(input_samples_mapping)):
+        input_sample = input_samples_mapping[idx]
+        input_seq_len = input_sample[2]
+        if target_samples_mapping is not None:
+            target_sample = target_samples_mapping[idx]
+            target_seq_len = target_sample[2]
+        if curr_input_seq_len + input_seq_len > max_seq_len_input or \
+                (target_samples_mapping is not None and curr_target_seq_len + target_seq_len > max_seq_len_target):
+            input_samples.append(curr_input_sequence)
+            curr_input_seq_len = 0
+            curr_input_sequence = []
+            if target_samples_mapping is not None:
+                target_samples.append(curr_target_sequence)
+                curr_target_seq_len = 0
+                curr_target_sequence = []
+        curr_input_seq_len += input_seq_len
+        curr_input_sequence.append(tuple(input_sample))
+        if target_samples_mapping is not None:
+            curr_target_seq_len += target_seq_len
+            curr_target_sequence.append(tuple(target_sample))
+    # last sequence
+    if curr_input_seq_len > 0:
+        input_samples.append(curr_input_sequence)
+    if target_samples_mapping is not None and curr_target_seq_len > 0:
+        target_samples.append(curr_target_sequence)
+    return input_samples, target_samples
+
+
 class T5UnsupervisedDataset(torch.utils.data.Dataset):
 
     def __init__(self, name, indexed_dataset, data_prefix,
                  num_epochs, max_num_samples, masked_lm_prob,
                  max_seq_length, max_seq_length_dec,
-                 short_seq_prob, seed, sort_samples=False):
+                 short_seq_prob, seed, sort_samples=False, pack_samples=False):
 
         # Params to store.
         self.name = name
         self.seed = seed
         self.sorted = sort_samples
+        self.packed = pack_samples
+        self.supervised = False
+        self.ordered = True if self.sorted else False
         self.masked_lm_prob = masked_lm_prob
         self.max_seq_length = max_seq_length
         self.max_seq_length_dec = max_seq_length_dec
@@ -56,6 +100,9 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
                                                    self.name,
                                                    False,
                                                    sort_samples=sort_samples)
+        if pack_samples:
+            self.packed_samples, _ = pack_samples(self.samples_mapping,
+                                               self.max_seq_length)
 
         # Vocab stuff.
         tokenizer = get_tokenizer()
@@ -71,25 +118,40 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
         assert len(self.sentinel_tokens) > 0, "Provide the argument --vocab-extra-ids 100 to the script"
 
     def get_max_seq_len_from_data(self):
-        return min(np.max(self.samples_mapping[:, 2]), self.max_seq_length)
+        if self.packed:
+            return self.max_seq_length
+        else:
+            return min(np.max(self.samples_mapping[:, 2]), self.max_seq_length)
 
     def get_seq_len(self, idx):
-        return self.samples_mapping[idx, 2]
+        if self.packed:
+            return self.max_seq_length
+        else:
+            return self.samples_mapping[idx, 2]
 
     def set_per_sample_seq_len_func(self, per_sample_seq_len_func):
         self.per_sample_seq_len_func = per_sample_seq_len_func
 
     def __len__(self):
-        return self.samples_mapping.shape[0]
+        if self.packed:
+            return len(self.packed_samples)
+        else:
+            return self.samples_mapping.shape[0]
 
     def __getitem__(self, idx):
         assert hasattr(self, 'per_sample_seq_len_func'), \
             "set_per_sample_seq_len_func() must be called before __getitem__()"
-        start_index, end_index, _ = self.samples_mapping[idx]
-        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
         sample = []
-        for index in range(start_index, end_index):
-            sample.append(self.indexed_dataset[index])
+        if self.packed:
+            for (start_index, end_index, _) in self.packed_samples[idx]:
+                sample.extend(self.indexed_dataset[start_index:end_index])
+                for index in range(start_index, end_index):
+                    sample.append(self.indexed_dataset[index])
+        else:
+            start_index, end_index, _ = self.samples_mapping[idx]
+            for index in range(start_index, end_index):
+                sample.append(self.indexed_dataset[index])
+        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))
@@ -112,12 +174,15 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                  data_prefix,
                  num_epochs, max_num_samples,
                  max_seq_length, max_seq_length_dec,
-                 seed, sort_samples=False):
+                 seed, sort_samples=False, pack_samples=False):
 
         # Params to store.
         self.name = name
         self.seed = seed
         self.sorted = sort_samples
+        self.packed = pack_samples
+        self.supervised = True
+        self.ordered = True
         self.max_seq_length = max_seq_length
         self.max_seq_length_dec = max_seq_length_dec
         self.input_max_seq_length = -1
@@ -130,24 +195,25 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.target_indexed_dataset = target_indexed_dataset
 
         # Build the samples mapping.
-        self.input_samples_mapping = get_samples_mapping_supervised(self.input_indexed_dataset,
+        self.input_samples_mapping, self.target_samples_mapping = get_samples_mapping_supervised(
+                                                            self.input_indexed_dataset,
+                                                            self.target_indexed_dataset,
                                                             data_prefix,
                                                             num_epochs,
                                                             max_num_samples,
-                                                            self.max_seq_length - 2, # account for added tokens
+                                                            self.max_seq_length,
+                                                            self.max_seq_length_dec - 2, # account for added tokens
                                                             self.seed,
                                                             self.name,
                                                             False,
                                                             sort_samples=sort_samples)
-        self.target_samples_mapping = get_samples_mapping_supervised(self.target_indexed_dataset,
-                                                                    data_prefix,
-                                                                    num_epochs,
-                                                                    max_num_samples,
-                                                                    self.max_seq_length_dec - 2, # account for added tokens
-                                                                    self.seed,
-                                                                    self.name,
-                                                                    False,
-                                                                    sort_samples=sort_samples)
+
+        if pack_samples:
+            self.packed_input_samples, self.packed_target_samples = pack_samples(
+                                               self.input_samples_mapping,
+                                               self.max_seq_length,
+                                               self.target_samples_mapping,
+                                               self.max_seq_length_dec - 2)
 
         # Vocab stuff.
         tokenizer = get_tokenizer()
@@ -163,35 +229,59 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         assert len(self.sentinel_tokens) > 0, "Provide the argument --vocab-extra-ids 100 to the script"
 
     def get_max_seq_len_from_data(self):
-        return min(np.max(self.input_samples_mapping[:, 2]), self.max_seq_length)
+        if self.packed:
+            return self.max_seq_length
+        else:
+            return min(np.max(self.input_samples_mapping[:, 2]), self.max_seq_length)
 
     def get_dec_max_seq_len_from_data(self):
-        return min(np.max(self.target_samples_mapping[:, 2]), self.max_seq_length_dec)
+        if self.packed:
+            return self.max_seq_length_dec
+        else:
+            return min(np.max(self.target_samples_mapping[:, 2]), self.max_seq_length_dec)
 
     def get_seq_len(self, idx):
-        return self.input_samples_mapping[idx, 2]
+        if self.packed:
+            return self.max_seq_length
+        else:
+            return self.input_samples_mapping[idx, 2]
 
     def get_dec_seq_len(self, idx):
-        return self.target_samples_mapping[idx, 2]
+        if self.packed:
+            return self.max_seq_length_dec
+        else:
+            return self.target_samples_mapping[idx, 2]
 
     def set_per_sample_seq_len_func(self, per_sample_seq_len_func):
         self.per_sample_seq_len_func = per_sample_seq_len_func
 
     def __len__(self):
-        return self.input_samples_mapping.shape[0]
+        if self.packed:
+            return len(self.packed_input_samples)
+        else:
+            return self.input_samples_mapping.shape[0]
 
     def __getitem__(self, idx):
         assert hasattr(self, 'per_sample_seq_len_func'), \
             "set_per_sample_seq_len_func() must be called before __getitem__()"
-        input_start_index, input_end_index, _ = self.input_samples_mapping[idx]
-        target_start_index, target_end_index, _ = self.target_samples_mapping[idx]
-        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
         input_sample = []
-        for index in range(input_start_index, input_end_index):
-            input_sample.append(self.input_indexed_dataset[index])
         target_sample = []
-        for index in range(target_start_index, target_end_index):
-            target_sample.append(self.target_indexed_dataset[index])
+        if self.packed:
+            for (start_index, end_index, _) in self.packed_input_samples[idx]:
+                for index in range(start_index, end_index):
+                    input_sample.append(self.input_indexed_dataset[index])
+            for (start_index, end_index, _) in self.packed_target_samples[idx]:
+                for index in range(start_index, end_index):
+                    target_sample.append(self.target_indexed_dataset[index])
+        else:
+            input_start_index, input_end_index, _ = self.input_samples_mapping[idx]
+            target_start_index, target_end_index, _ = self.target_samples_mapping[idx]
+            for index in range(input_start_index, input_end_index):
+                input_sample.append(self.input_indexed_dataset[index])
+            for index in range(target_start_index, target_end_index):
+                target_sample.append(self.target_indexed_dataset[index])
+
+        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))

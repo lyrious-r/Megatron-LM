@@ -202,6 +202,10 @@ def validate_args(args, defaults={}):
 
     if args.dataloader_type is None:
         args.dataloader_type = 'single'
+    
+    if args.pack_dataset:
+        assert args.dataloader_type == 'ordered', \
+            'pack dataset is only supported with ordered dataloader'
 
     # Consumed tokens.
     args.consumed_train_samples = 0
@@ -584,8 +588,12 @@ def _add_training_args(parser):
                        choices=['adam', 'sgd'],
                        help='Optimizer function')
     group.add_argument('--dataloader-type', type=str, default=None,
-                       choices=['single', 'cyclic', 'sorted'],
+                       choices=['single', 'cyclic', 'ordered'],
                        help='Single pass vs multiple pass data loader')
+    group.add_argument('--sort-dataset', action='store_true',
+                       help='Sort the dataset by sequence length')
+    group.add_argument('--pack-dataset', action='store_true',
+                        help='Pack multiple samples in to a single sequence.')
     group.add_argument('--dynamic-batchsize', action="store_true",
                        help='Use dynamic batch size for training')
     group.add_argument('--dynamic-batch-level', type=str, default='batch',

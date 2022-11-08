@@ -961,7 +961,7 @@ def build_train_valid_test_data_iterators(
 
     # Build iterators.
     dl_type = args.dataloader_type
-    assert dl_type in ['single', 'cyclic', 'sorted']
+    assert dl_type in ['single', 'cyclic', 'ordered']
 
     if train_dataloader is not None:
         train_data_iterator = iter(train_dataloader) if dl_type == 'single' \

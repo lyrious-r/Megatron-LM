@@ -421,7 +421,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     skip_warmup, binary_head=False,
                                     max_seq_length_dec=None,
                                     dataset_type='standard_bert',
-                                    sort_samples=False):
+                                    sort_samples=False,
+                                    pack_samples=False):
 
     if len(data_prefix) == 1:
         return _build_train_valid_test_datasets(data_prefix[0],
@@ -433,7 +434,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                                 binary_head,
                                                 max_seq_length_dec,
                                                 dataset_type=dataset_type,
-                                                sort_samples=sort_samples)
+                                                sort_samples=sort_samples,
+                                                pack_samples=pack_samples)
     # Blending dataset.
     # Parse the values.
     output = get_datasets_weights_and_num_samples(data_prefix,
@@ -449,7 +451,7 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             prefixes[i], data_impl, splits_string,
             datasets_train_valid_test_num_samples[i],
             max_seq_length, masked_lm_prob, short_seq_prob,
-            seed, skip_warmup, binary_head, dataset_type=dataset_type, sort_samples=sort_samples)
+            seed, skip_warmup, binary_head, dataset_type=dataset_type, sort_samples=sort_samples, pack_samples=pack_samples)
         if train_ds:
             train_datasets.append(train_ds)
         if valid_ds:
@@ -479,7 +481,8 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                      skip_warmup, binary_head,
                                      max_seq_length_dec,
                                      dataset_type='standard_bert',
-                                     sort_samples=False):
+                                     sort_samples=False,
+                                     pack_samples=False):
 
     if dataset_type not in DSET_TYPES:
         raise ValueError("Invalid dataset_type: ", dataset_type)
@@ -552,6 +555,9 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             )
             if dataset_type == DSET_TYPE_T5 or dataset_type == DSET_TYPE_T5_SUPERVISED:
                 kwargs["sort_samples"] = sort_samples
+                kwargs["pack_samples"] = pack_samples
+            elif sort_samples or pack_samples:
+                raise ValueError("sort_samples and pack_samples are only supported for T5 dataset type")
 
             if dataset_type == DSET_TYPE_ICT:
                 args = get_args()
@@ -667,7 +673,8 @@ def get_samples_mapping(indexed_dataset,
                         seed,
                         name,
                         binary_head,
-                        sort_samples=False):
+                        sort_samples=False,
+                        pack_samples=False):
     """Get a list that maps a sample index to a starting sentence index, end sentence index, and length"""
 
     if not num_epochs:
@@ -717,7 +724,8 @@ def get_samples_mapping(indexed_dataset,
             seed,
             verbose,
             2 if binary_head else 1,
-            sort_samples)
+            sort_samples,
+            pack_samples)
         print_rank_0(' > done building samples index maping')
         np.save(indexmap_filename, samples_mapping, allow_pickle=True)
         print_rank_0(' > saved the index mapping in {}'.format(
@@ -759,7 +767,8 @@ def get_samples_mapping_supervised(
                         seed,
                         name,
                         binary_head,
-                        sort_samples=False):
+                        sort_samples=False,
+                        pack_samples=False):
     """Get a list that maps a sample index to a starting sentence index, end sentence index, and length"""
 
     if not num_epochs:
@@ -793,7 +802,7 @@ def get_samples_mapping_supervised(
 
     # Build the indexed mapping if not exist.
     if torch.distributed.get_rank() == 0 and \
-       not os.path.isfile(input_indexmap_filename):
+       (not os.path.isfile(input_indexmap_filename)) or (not os.path.isfile(target_indexmap_filename)):
         print(' > WARNING: could not find index map file {} and {}, building '
               'the indices on rank 0 ...'.format(input_indexmap_filename, target_indexmap_filename))
 

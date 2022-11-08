@@ -545,7 +545,7 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
         auto input_seq_len = int32_t{0};
         auto target_seq_len = int32_t{0};
 
-        // Loop through sentences.
+        // Loop through sentences. In supervised training each document is a sample.
         for (auto sent_index = input_sent_index_first; sent_index < input_sent_index_last;
               ++sent_index) {
           // Add the size and number of sentences.
@@ -557,10 +557,6 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
           target_seq_len += target_sizes[sent_index];
         }
 
-        // If we have reached the target length.
-        // and if not only one sentence is left in the document.
-        // and if we have at least two sentneces.
-        // and if we have reached end of the document.
         // Check for overflow.
         if ((3 * map_index + 2) > std::numeric_limits<int64_t>::max()) {
           cout << "number of samples exceeded maximum "
@@ -605,8 +601,8 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
     using SamplePair = std::tuple<DocIdx, DocIdx, DocIdx, DocIdx, DocIdx, DocIdx>;
     std::vector<SamplePair> idx_maps;
     for (int64_t i = 0; i < num_samples; ++i) {
-      idx_maps.push_back(std::make_tuple(maps[3 * i], maps[3 * i + 1],
-                                         maps[3 * i + 2], target_maps[3 * i],
+      idx_maps.push_back(std::make_tuple(input_maps[3 * i], input_maps[3 * i + 1],
+                                         input_maps[3 * i + 2], target_maps[3 * i],
                                          target_maps[3 * i + 1], target_maps[3 * i + 2]));
     }
     // sort based on input sequence length, and then on target sequence length
@@ -621,9 +617,9 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
               });
     // Copy back to maps
     for (int64_t i = 0; i < num_samples; ++i) {
-      maps[3 * i] = std::get<0>(idx_maps[i]);
-      maps[3 * i + 1] = std::get<1>(idx_maps[i]);
-      maps[3 * i + 2] = std::get<2>(idx_maps[i]);
+      input_maps[3 * i] = std::get<0>(idx_maps[i]);
+      input_maps[3 * i + 1] = std::get<1>(idx_maps[i]);
+      input_maps[3 * i + 2] = std::get<2>(idx_maps[i]);
       target_maps[3 * i] = std::get<3>(idx_maps[i]);
       target_maps[3 * i + 1] = std::get<4>(idx_maps[i]);
       target_maps[3 * i + 2] = std::get<5>(idx_maps[i]);
@@ -638,9 +634,9 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
       const auto i0 = 3 * i;
       const auto j0 = 3 * j;
       // Swap values.
-      swap(maps[i0], maps[j0]);
-      swap(maps[i0 + 1], maps[j0 + 1]);
-      swap(maps[i0 + 2], maps[j0 + 2]);
+      swap(input_maps[i0], input_maps[j0]);
+      swap(input_maps[i0 + 1], input_maps[j0 + 1]);
+      swap(input_maps[i0 + 2], input_maps[j0 + 2]);
       swap(target_maps[i0], target_maps[j0]);
       swap(target_maps[i0 + 1], target_maps[j0 + 1]);
       swap(target_maps[i0 + 2], target_maps[j0 + 2]);
@@ -648,7 +644,12 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
   }
 
   // Method to deallocate memory.
-  py::capsule free_when_done(maps, [](void *mem_) {
+  py::capsule input_free_when_done(input_maps, [](void *mem_) {
+    DocIdx *mem = reinterpret_cast<DocIdx *>(mem_);
+    delete[] mem;
+  });
+
+  py::capsule target_free_when_done(target_maps, [](void *mem_) {
     DocIdx *mem = reinterpret_cast<DocIdx *>(mem_);
     delete[] mem;
   });
@@ -657,12 +658,12 @@ std::tuple<py::array, py::array> build_mapping_supervised_impl(const py::array_t
   const auto byte_size = sizeof(DocIdx);
   return std::make_tuple(py::array(std::vector<int64_t>{num_samples, 3},  // shape
                                   {3 * byte_size, byte_size},  // C-style contiguous strides
-                                  maps,                        // the data pointer
-                                  free_when_done),             // numpy array references
+                                  input_maps,                        // the data pointer
+                                  input_free_when_done),             // numpy array references
                           py::array(std::vector<int64_t>{num_samples, 3},  // shape
                                     {3 * byte_size, byte_size},  // C-style contiguous strides
                                     target_maps,                 // the data pointer
-                                    free_when_done));            // numpy array references
+                                    target_free_when_done));            // numpy array references
 }
 
 py::array build_mapping(const py::array_t<int64_t> &docs_,

@@ -60,8 +60,8 @@ def build_pretraining_data_loader(dataset, consumed_samples):
         )
         shape_iterator = None
         n_iters_per_epoch = len(dataset) // args.global_batch_size
-    elif args.dataloader_type == "sorted":
-        batch_sampler = MegatronPretrainingSortedSampler(
+    elif args.dataloader_type == "ordered":
+        batch_sampler = MegatronPretrainingOrderedSampler(
             dataset,
             total_samples=len(dataset),
             consumed_samples=consumed_samples,
@@ -69,6 +69,7 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_rank=mpu.get_data_parallel_rank(),
             data_parallel_size=mpu.get_data_parallel_world_size(),
             data_sharding=args.data_sharding,
+            pack_samples=args.pack_samples,
             dynamic_batchsize=args.dynamic_batchsize,
             dynamic_batch_level=args.dynamic_batch_level,
             seq_len_buckets=args.seq_len_buckets,
@@ -264,7 +265,7 @@ class ShapeIterator():
     def __iter__(self):
         return self.shape_generator()
 
-class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
+class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
     def __init__(
         self,
         dataset,
@@ -294,11 +295,11 @@ class MegatronPretrainingSortedSampler(MegatronPretrainingRandomSampler):
         assert dynamic_batch_level == 'batch', 'Only batch level dynamic batching is supported'
         if not isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
             raise NotImplementedError(
-                "Only T5Dataset is supported for sorted sampler for now."
+                "Only T5Dataset is supported for ordered sampler for now."
             )
         assert (
-            hasattr(dataset, "sorted") and dataset.sorted
-        ), "Dataset should be sorted for sorted sampler."
+            hasattr(dataset, "ordered") and dataset.ordered
+        ), "Dataset should be ordered for ordered sampler."
         self._global_batch_size_per_rank = get_num_microbatches() * self.micro_batch_size
         self._global_batch_size = self._global_batch_size_per_rank * self.data_parallel_size
         self._dynamic_batchsize = dynamic_batchsize
