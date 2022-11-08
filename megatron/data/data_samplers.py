@@ -386,9 +386,12 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
                 for idx, seq_len in enumerate(self._seq_len_buckets):
                     self._per_seq_len_mbs[idx] = self._round_mbs(inv_mem_model.get_microbatch_size(seq_len))
-            else:
+            elif args.memory_model == "product":
                 for idx, seq_len in enumerate(self._seq_len_buckets):
                     self._per_seq_len_mbs[idx] = self._round_mbs((self.micro_batch_size * args.encoder_seq_length) // seq_len)
+            else:
+                for idx, seq_len in enumerate(self._seq_len_buckets):
+                    self._per_seq_len_mbs[idx] = self.micro_batch_size
         # broadcast
         buffer = torch.cuda.IntTensor(self._per_seq_len_mbs)
         torch.distributed.broadcast(
@@ -438,6 +441,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         # now we have the start indices and number of samples for each bucket
         # we can precalculate the batches
         self._batches = []
+        print_rank_0(" >> Dynamic batch stats:")
         for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
             if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
                 num_global_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
@@ -447,6 +451,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 )
                 start_offset = start_idx + self.data_parallel_rank * per_rank_samples
                 n_microbatches_per_global_batch = self._n_microbatches_per_global_batch(self._per_seq_len_mbs[bucket_idx])
+                print_rank_0(" >>   Enc Seq len {}: {} global batches, {} microbatches per global batch, {} samples per microbatch.".format(self._seq_len_buckets[bucket_idx], num_global_batches, n_microbatches_per_global_batch, self._per_seq_len_mbs[bucket_idx]))
                 for gb in range(num_global_batches):
                     microbatch = []
                     for mb in range(n_microbatches_per_global_batch):
