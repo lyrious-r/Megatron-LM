@@ -69,7 +69,6 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             data_parallel_rank=mpu.get_data_parallel_rank(),
             data_parallel_size=mpu.get_data_parallel_world_size(),
             data_sharding=args.data_sharding,
-            pack_samples=args.pack_samples,
             dynamic_batchsize=args.dynamic_batchsize,
             dynamic_batch_level=args.dynamic_batch_level,
             tokens_per_global_batch=args.tokens_per_global_batch,

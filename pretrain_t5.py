@@ -161,7 +161,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
         skip_warmup=(not args.mmap_warmup),
         dataset_type='t5' if args.targets_data_path is None else 't5_supervised',
         sort_samples=args.sort_dataset,
-        pack_samples=args.pack_samples)
+        pack_samples=args.pack_dataset,)
     print_rank_0("> finished creating T5 datasets ...")
 
     return train_ds, valid_ds, test_ds
