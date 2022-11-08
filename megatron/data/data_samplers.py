@@ -279,11 +279,12 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         data_sharding,
         dynamic_batchsize=False,
         dynamic_batch_level='batch',
-        seq_len_buckets=None,
-        dec_seq_len_buckets=None,
-        microbatch_size_buckets=None,
-        max_truncation_factor=0.05,
-        min_truncation_seq_len=512,
+        tokens_per_global_batch=None,
+        # seq_len_buckets=None,
+        # dec_seq_len_buckets=None,
+        # microbatch_size_buckets=None,
+        # max_truncation_factor=0.05,
+        # min_truncation_seq_len=512,
     ):
         super().__init__(
             dataset,
@@ -305,11 +306,14 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         self._global_batch_size_per_rank = get_num_microbatches() * self.micro_batch_size
         self._global_batch_size = self._global_batch_size_per_rank * self.data_parallel_size
         self._dynamic_batchsize = dynamic_batchsize
-        self._seq_len_buckets = seq_len_buckets
-        self._dec_seq_len_buckets = dec_seq_len_buckets
-        self._microbatch_size_buckets = microbatch_size_buckets
-        self._max_truncation_factor = max_truncation_factor
-        self._min_truncation_seq_len = min_truncation_seq_len
+        if dynamic_batchsize:
+            assert tokens_per_global_batch is not None, "tokens_per_global_batch should be provided for dynamic batching"
+            self._tokens_per_global_batch = tokens_per_global_batch
+        # self._seq_len_buckets = seq_len_buckets
+        # self._dec_seq_len_buckets = dec_seq_len_buckets
+        # self._microbatch_size_buckets = microbatch_size_buckets
+        # self._max_truncation_factor = max_truncation_factor
+        # self._min_truncation_seq_len = min_truncation_seq_len
         self._shape_consumed_samples = consumed_samples
         self._is_supervised_dataset = isinstance(dataset, T5SupervisedDataset)
         if dynamic_batchsize:
@@ -348,153 +352,218 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
 
     def _precalc_batches(self):
         assert self._dynamic_batchsize
+        args = get_args()
+        assert args.memory_model == "fixed", "Only fixed micro-batch size is supported for dynamic batching for now."
+        
 
         # calculate buckets if not provided
-        if not self._seq_len_buckets:
-            # from 32 to max seq len
-            seq_len_buckets = [
-                2**i
-                for i in range(
-                    5, int(np.ceil(np.log2(self.dataset.get_max_seq_len_from_data()))) + 1
-                )
-            ]
-            self._seq_len_buckets = seq_len_buckets
-        if not self._dec_seq_len_buckets:
-            self._dec_seq_len_buckets = self._seq_len_buckets
-        if not self._microbatch_size_buckets:
-            self._microbatch_size_buckets = [1, 2, 4] + [8 * i for i in range(self._global_batch_size_per_rank // 8 + 1)]
-        self._microbatch_size_buckets = [x for x in self._microbatch_size_buckets if self._global_batch_size_per_rank % x == 0]
+        # if not self._seq_len_buckets:
+        #     # from 32 to max seq len
+        #     seq_len_buckets = [
+        #         2**i
+        #         for i in range(
+        #             5, int(np.ceil(np.log2(self.dataset.get_max_seq_len_from_data()))) + 1
+        #         )
+        #     ]
+        #     self._seq_len_buckets = seq_len_buckets
+        # if not self._dec_seq_len_buckets:
+        #     self._dec_seq_len_buckets = self._seq_len_buckets
+        # if not self._microbatch_size_buckets:
+        #     self._microbatch_size_buckets = [1, 2, 4] + [8 * i for i in range(self._global_batch_size_per_rank // 8 + 1)]
+        # self._microbatch_size_buckets = [x for x in self._microbatch_size_buckets if self._global_batch_size_per_rank % x == 0]
 
         # calculate mbs and broadcast to all dp and pp ranks
-        self._per_seq_len_mbs = [-1] * len(self._seq_len_buckets)
-        if mpu.get_data_parallel_rank() == 0:
-            args = get_args()
-            if args.memory_model == "plopt":
-                is_encoder = mpu.is_pipeline_stage_before_split()
-                num_layers = mpu.get_num_layers(args, True)  # since we only deal with T5
-                n_encoder_layers = num_layers if is_encoder else 0
-                n_decoder_layers = num_layers if not is_encoder else 0
-                inv_mem_model = InvTransformerMemoryModel(
-                    args.hidden_size,
-                    args.num_attention_heads,
-                    n_encoder_layers,
-                    n_decoder_layers,
-                    args.ffn_hidden_size,
-                    args.kv_channels,
-                    tp_degree=mpu.get_tensor_model_parallel_world_size(),
-                )
-                inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
-                for idx, seq_len in enumerate(self._seq_len_buckets):
-                    self._per_seq_len_mbs[idx] = self._round_mbs(inv_mem_model.get_microbatch_size(seq_len))
-            elif args.memory_model == "product":
-                for idx, seq_len in enumerate(self._seq_len_buckets):
-                    self._per_seq_len_mbs[idx] = self._round_mbs((self.micro_batch_size * args.encoder_seq_length) // seq_len)
-            else:
-                for idx, seq_len in enumerate(self._seq_len_buckets):
-                    self._per_seq_len_mbs[idx] = self.micro_batch_size
-        # broadcast
-        buffer = torch.cuda.IntTensor(self._per_seq_len_mbs)
-        torch.distributed.broadcast(
-            buffer,
-            src=mpu.get_data_parallel_src_rank(),
-            group=mpu.get_data_parallel_group(),
-        )
-        torch.distributed.broadcast(
-            buffer,
-            src=mpu.get_pipeline_model_parallel_first_rank(),
-            group=mpu.get_pipeline_model_parallel_group(),
-        )
-        self._per_seq_len_mbs = buffer.tolist()
+        # self._per_seq_len_mbs = [-1] * len(self._seq_len_buckets)
+        # if mpu.get_data_parallel_rank() == 0:
+        #     args = get_args()
+        #     if args.memory_model == "plopt":
+        #         is_encoder = mpu.is_pipeline_stage_before_split()
+        #         num_layers = mpu.get_num_layers(args, True)  # since we only deal with T5
+        #         n_encoder_layers = num_layers if is_encoder else 0
+        #         n_decoder_layers = num_layers if not is_encoder else 0
+        #         inv_mem_model = InvTransformerMemoryModel(
+        #             args.hidden_size,
+        #             args.num_attention_heads,
+        #             n_encoder_layers,
+        #             n_decoder_layers,
+        #             args.ffn_hidden_size,
+        #             args.kv_channels,
+        #             tp_degree=mpu.get_tensor_model_parallel_world_size(),
+        #         )
+        #         inv_mem_model.set_reference(self.micro_batch_size, args.encoder_seq_length)
+        #         for idx, seq_len in enumerate(self._seq_len_buckets):
+        #             self._per_seq_len_mbs[idx] = self._round_mbs(inv_mem_model.get_microbatch_size(seq_len))
+        #     elif args.memory_model == "product":
+        #         for idx, seq_len in enumerate(self._seq_len_buckets):
+        #             self._per_seq_len_mbs[idx] = self._round_mbs((self.micro_batch_size * args.encoder_seq_length) // seq_len)
+        #     else:
+        #         for idx, seq_len in enumerate(self._seq_len_buckets):
+        #             self._per_seq_len_mbs[idx] = self.micro_batch_size
+        # # broadcast
+        # buffer = torch.cuda.IntTensor(self._per_seq_len_mbs)
+        # torch.distributed.broadcast(
+        #     buffer,
+        #     src=mpu.get_data_parallel_src_rank(),
+        #     group=mpu.get_data_parallel_group(),
+        # )
+        # torch.distributed.broadcast(
+        #     buffer,
+        #     src=mpu.get_pipeline_model_parallel_first_rank(),
+        #     group=mpu.get_pipeline_model_parallel_group(),
+        # )
+        # self._per_seq_len_mbs = buffer.tolist()
 
-        # calculate the starting sample index for each sequence length bucket
-        self._per_seq_len_bucket_start_indices = [-1] * len(self._seq_len_buckets)
-        for i in range(self.total_samples):
-            seq_len = self.dataset.get_seq_len(i)
-            bucket_idx = self._get_seq_len_bucket_idx(seq_len)
-            if self._per_seq_len_bucket_start_indices[bucket_idx] == -1:
-                self._per_seq_len_bucket_start_indices[bucket_idx] = i
+        # # calculate the starting sample index for each sequence length bucket
+        # self._per_seq_len_bucket_start_indices = [-1] * len(self._seq_len_buckets)
+        # for i in range(self.total_samples):
+        #     seq_len = self.dataset.get_seq_len(i)
+        #     bucket_idx = self._get_seq_len_bucket_idx(seq_len)
+        #     if self._per_seq_len_bucket_start_indices[bucket_idx] == -1:
+        #         self._per_seq_len_bucket_start_indices[bucket_idx] = i
         # adjust start indices so each bucket's number of samples is a multiple of
         # effective batch size
-        self._per_seq_len_bucket_num_samples = [0] * len(self._seq_len_buckets)
-        for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
-            if start_idx == -1:
-                continue
-            next_bucket_start_idx = -1
-            for i in range(bucket_idx + 1, len(self._seq_len_buckets)):
-                if self._per_seq_len_bucket_start_indices[i] != -1:
-                    next_bucket_start_idx = self._per_seq_len_bucket_start_indices[i]
-                    break
-            if next_bucket_start_idx == -1:
-                num_current_bucket_samples = self.total_samples - start_idx
-            else:
-                num_current_bucket_samples = next_bucket_start_idx - start_idx
-            num_batches = num_current_bucket_samples // self._global_batch_size
-            end_idx = start_idx + num_batches * self._global_batch_size
-            self._per_seq_len_bucket_num_samples[bucket_idx] = (
-                num_batches * self._global_batch_size
+        # self._per_seq_len_bucket_num_samples = [0] * len(self._seq_len_buckets)
+        # for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
+        #     if start_idx == -1:
+        #         continue
+        #     next_bucket_start_idx = -1
+        #     for i in range(bucket_idx + 1, len(self._seq_len_buckets)):
+        #         if self._per_seq_len_bucket_start_indices[i] != -1:
+        #             next_bucket_start_idx = self._per_seq_len_bucket_start_indices[i]
+        #             break
+        #     if next_bucket_start_idx == -1:
+        #         num_current_bucket_samples = self.total_samples - start_idx
+        #     else:
+        #         num_current_bucket_samples = next_bucket_start_idx - start_idx
+        #     num_batches = num_current_bucket_samples // self._global_batch_size
+        #     end_idx = start_idx + num_batches * self._global_batch_size
+        #     self._per_seq_len_bucket_num_samples[bucket_idx] = (
+        #         num_batches * self._global_batch_size
+        #     )
+        #     if bucket_idx != len(self._seq_len_buckets) - 1:
+        #         self._per_seq_len_bucket_start_indices[bucket_idx + 1] = end_idx
+
+        self._batches = []
+        current_batch_start_idx = 0
+        current_batch_size = 0
+        current_batch_input_seq_len = 0
+        current_batch_target_seq_len = 0
+        adusted_total_samples = 0
+        n_global_batches = 0
+        num_micro_batches_per_global_batch = []
+
+        # needed for per sample seq len func for dataset
+        global_batch_start_boundaries = []
+        per_global_batch_enc_dec_seq_lengths = []
+
+        def _append_batch(start_idx, curr_idx):
+            nonlocal adusted_total_samples
+            nonlocal n_global_batches
+            nonlocal num_micro_batches_per_global_batch
+            nonlocal current_batch_input_seq_len
+            nonlocal current_batch_target_seq_len
+            adusted_total_samples += curr_idx - start_idx
+            n_microbatches = (curr_idx - start_idx) // self.micro_batch_size
+            n_microbatches_per_rank = n_microbatches // self.data_parallel_size
+            num_micro_batches_per_global_batch.append(n_microbatches)
+            microbatches = []
+            for m in range(n_microbatches_per_rank):
+                mb_start_idx = start_idx + self.data_parallel_rank * n_microbatches_per_rank + m * self.micro_batch_size
+                mb_end_idx = mb_start_idx + self.micro_batch_size
+                microbatches.append((mb_start_idx, mb_end_idx))
+            self._batches.append(microbatches)
+            global_batch_start_boundaries.append(start_idx)
+            n_global_batches += 1
+            per_global_batch_enc_dec_seq_lengths.append(
+                (current_batch_input_seq_len, current_batch_target_seq_len)
             )
-            if bucket_idx != len(self._seq_len_buckets) - 1:
-                self._per_seq_len_bucket_start_indices[bucket_idx + 1] = end_idx
-        adusted_total_samples = sum(self._per_seq_len_bucket_num_samples)
+
+        for idx in range(self.total_samples):
+            current_batch_tokens = current_batch_size * current_batch_input_seq_len
+            input_seq_len = self.dataset.get_seq_len(idx)
+            target_seq_len = self.dataset.get_dec_seq_len(idx)
+            # create a new batch if the current batch contains a multiple
+            # of data_parallel_size * micro_batch_size samples, and
+            # contains roughly _tokens_per_global_batch tokens
+            if current_batch_tokens \
+                and ((idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0) \
+                and current_batch_tokens + max(input_seq_len, current_batch_input_seq_len) >= self._tokens_per_global_batch:
+                # create a new batch
+                _append_batch(current_batch_start_idx, idx)
+                current_batch_start_idx = idx
+                current_batch_size = 0
+                current_batch_input_seq_len = 0
+                current_batch_target_seq_len = 0
+            # append to current batch
+            current_batch_size += 1
+            current_batch_input_seq_len = max(current_batch_input_seq_len, input_seq_len)
+            current_batch_target_seq_len = max(current_batch_target_seq_len, target_seq_len)
+        # create the last batch
+        if (idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0:
+            _append_batch(current_batch_start_idx, idx)
+
         self.last_batch_size = self.total_samples - adusted_total_samples
         print_rank_0("INFO: adjusted total samples from {} to {}. Data wasted: {} ({:.2f}%).".format(self.total_samples, adusted_total_samples, self.last_batch_size, self.last_batch_size / self.total_samples * 100))
-        # now we have the start indices and number of samples for each bucket
-        # we can precalculate the batches
-        self._batches = []
-        print_rank_0(" >> Dynamic batch stats:")
-        for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
-            if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
-                num_global_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
-                per_rank_samples = (
-                    self._per_seq_len_bucket_num_samples[bucket_idx]
-                    // self.data_parallel_size
-                )
-                start_offset = start_idx + self.data_parallel_rank * per_rank_samples
-                n_microbatches_per_global_batch = self._n_microbatches_per_global_batch(self._per_seq_len_mbs[bucket_idx])
-                print_rank_0(" >>   Enc Seq len {}: {} global batches, {} microbatches per global batch, {} samples per microbatch.".format(self._seq_len_buckets[bucket_idx], num_global_batches, n_microbatches_per_global_batch, self._per_seq_len_mbs[bucket_idx]))
-                for gb in range(num_global_batches):
-                    microbatch = []
-                    for mb in range(n_microbatches_per_global_batch):
-                        start_idx = start_offset + gb * self._global_batch_size + mb * self._per_seq_len_mbs[bucket_idx]
-                        microbatch.append((start_idx, start_idx + self._per_seq_len_mbs[bucket_idx]))
-                    self._batches.append(microbatch)
+        print_rank_0(">> Dynamic batch stats:")
+        print_rank_0(">> {} total global batches, avg. {:.2f} microbatches per global batch, {} samples per microbatch.".format(n_global_batches, sum(num_micro_batches_per_global_batch) / len(num_micro_batches_per_global_batch), self.micro_batch_size))
+        # # now we have the start indices and number of samples for each bucket
+        # # we can precalculate the batches
+        # self._batches = []
+        # print_rank_0(" >> Dynamic batch stats:")
+        # for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
+        #     if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
+        #         num_global_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
+        #         per_rank_samples = (
+        #             self._per_seq_len_bucket_num_samples[bucket_idx]
+        #             // self.data_parallel_size
+        #         )
+        #         start_offset = start_idx + self.data_parallel_rank * per_rank_samples
+        #         n_microbatches_per_global_batch = self._n_microbatches_per_global_batch(self._per_seq_len_mbs[bucket_idx])
+        #         print_rank_0(" >>   Enc Seq len {}: {} global batches, {} microbatches per global batch, {} samples per microbatch.".format(self._seq_len_buckets[bucket_idx], num_global_batches, n_microbatches_per_global_batch, self._per_seq_len_mbs[bucket_idx]))
+        #         for gb in range(num_global_batches):
+        #             microbatch = []
+        #             for mb in range(n_microbatches_per_global_batch):
+        #                 start_idx = start_offset + gb * self._global_batch_size + mb * self._per_seq_len_mbs[bucket_idx]
+        #                 microbatch.append((start_idx, start_idx + self._per_seq_len_mbs[bucket_idx]))
+        #             self._batches.append(microbatch)
         # calculate per global batch decoder seq length
-        self._per_global_batch_decoder_seq_len = [] # 2D list [bucket, global_batch]
-        for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
-            if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
-                per_batch_seq_lens = []
-                num_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
-                for i in range(num_batches):
-                    start_offset = start_idx + i * self._global_batch_size
-                    end_offset = start_offset + self._global_batch_size
-                    max_seq_len = 0
-                    for sample_idx in range(start_offset, end_offset):
-                        if self._is_supervised_dataset:
-                            dec_seq_len = self.dataset.get_dec_seq_len(sample_idx)
-                        else:
-                            dec_seq_len = self.dataset.get_seq_len(sample_idx) * self.dataset.masked_lm_prob + 2
-                        max_seq_len = max(dec_seq_len, max_seq_len)
-                    per_batch_seq_lens.append(max_seq_len)
-                self._per_global_batch_decoder_seq_len.append(per_batch_seq_lens)
+        # self._per_global_batch_decoder_seq_len = [] # 2D list [bucket, global_batch]
+        # for bucket_idx, start_idx in enumerate(self._per_seq_len_bucket_start_indices):
+        #     if self._per_seq_len_bucket_num_samples[bucket_idx] > 0:
+        #         per_batch_seq_lens = []
+        #         num_batches = self._per_seq_len_bucket_num_samples[bucket_idx] // self._global_batch_size
+        #         for i in range(num_batches):
+        #             start_offset = start_idx + i * self._global_batch_size
+        #             end_offset = start_offset + self._global_batch_size
+        #             max_seq_len = 0
+        #             for sample_idx in range(start_offset, end_offset):
+        #                 if self._is_supervised_dataset:
+        #                     dec_seq_len = self.dataset.get_dec_seq_len(sample_idx)
+        #                 else:
+        #                     dec_seq_len = self.dataset.get_seq_len(sample_idx) * self.dataset.masked_lm_prob + 2
+        #                 max_seq_len = max(dec_seq_len, max_seq_len)
+        #             per_batch_seq_lens.append(max_seq_len)
+        #         self._per_global_batch_decoder_seq_len.append(per_batch_seq_lens)
         # set per sample seq len func for dataset
-        per_global_batch_enc_dec_seq_lengths = []
-        global_batch_id = 0
-        for start_idx, size, seq_len in zip(
-            self._per_seq_len_bucket_start_indices,
-            self._per_seq_len_bucket_num_samples,
-            self._seq_len_buckets,
-        ):
-            if size > 0:
-                num_global_batches = size // self._global_batch_size
-                for _ in range(num_global_batches):
-                    dec_seq_len = self._per_global_batch_decoder_seq_len[global_batch_id]
-                    dec_bucket_idx = self._get_seq_len_bucket_idx(dec_seq_len, decoder=True)
-                    dec_seq_len = self._dec_seq_len_buckets[dec_bucket_idx]
-                    per_global_batch_enc_dec_seq_lengths.append((seq_len, dec_seq_len))
-                    global_batch_id += 1
+        # per_global_batch_enc_dec_seq_lengths = []
+        # global_batch_id = 0
+        # for start_idx, size, seq_len in zip(
+        #     self._per_seq_len_bucket_start_indices,
+        #     self._per_seq_len_bucket_num_samples,
+        #     self._seq_len_buckets,
+        # ):
+        #     if size > 0:
+        #         num_global_batches = size // self._global_batch_size
+        #         for _ in range(num_global_batches):
+        #             dec_seq_len = self._per_global_batch_decoder_seq_len[global_batch_id]
+        #             dec_bucket_idx = self._get_seq_len_bucket_idx(dec_seq_len, decoder=True)
+        #             dec_seq_len = self._dec_seq_len_buckets[dec_bucket_idx]
+        #             per_global_batch_enc_dec_seq_lengths.append((seq_len, dec_seq_len))
+        #             global_batch_id += 1
 
         def per_sample_seq_len_func(idx):
-            global_batch_id = idx // self._global_batch_size
+            global_batch_id = bisect.bisect_right(global_batch_start_boundaries, idx) - 1
+            # global_batch_id = idx // self._global_batch_size
             return per_global_batch_enc_dec_seq_lengths[global_batch_id]
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
         self._per_sample_seq_len_func = per_sample_seq_len_func
