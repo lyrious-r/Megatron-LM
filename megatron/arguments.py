@@ -207,6 +207,10 @@ def validate_args(args, defaults={}):
         assert args.dataloader_type == 'ordered', \
             'pack dataset is only supported with ordered dataloader'
 
+    if args.dynamic_batchsize:
+        assert args.tokens_per_global_batch is not None, \
+            'dynamic batch size requires tokens-per-global-batch to be set'
+
     # Consumed tokens.
     args.consumed_train_samples = 0
     args.consumed_valid_samples = 0
@@ -599,6 +603,8 @@ def _add_training_args(parser):
     group.add_argument('--dynamic-batch-level', type=str, default='batch',
                        choices=['batch', 'microbatch'],
                        help='Dynamic batch size level (batch or microbatch)')
+    group.add_argument('--tokens-per-global-batch', type=int,
+                        help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--memory-model', type=str, default='fixed',
                        choices=['fixed', 'plopt', 'product'],
                        help='The memory model used to determine the microbatch size')

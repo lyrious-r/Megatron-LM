@@ -72,9 +72,10 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             pack_samples=args.pack_samples,
             dynamic_batchsize=args.dynamic_batchsize,
             dynamic_batch_level=args.dynamic_batch_level,
-            seq_len_buckets=args.seq_len_buckets,
-            max_truncation_factor=args.max_truncation_factor,
-            min_truncation_seq_len=args.min_truncation_seq_len,
+            tokens_per_global_batch=args.tokens_per_global_batch,
+            # seq_len_buckets=args.seq_len_buckets,
+            # max_truncation_factor=args.max_truncation_factor,
+            # min_truncation_seq_len=args.min_truncation_seq_len,
         )
         shape_iterator = batch_sampler.get_shape_iterator()
         n_iters_per_epoch = batch_sampler.n_iters_per_epoch()
