@@ -81,7 +81,7 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
         self.sorted = sort_samples
         self.packed = pack_samples
         self.supervised = False
-        self.ordered = True if self.sorted else False
+        self.ordered = True if self.sorted or self.packed else False
         self.masked_lm_prob = masked_lm_prob
         self.max_seq_length = max_seq_length
         self.max_seq_length_dec = max_seq_length_dec
@@ -132,6 +132,33 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
     def set_per_sample_seq_len_func(self, per_sample_seq_len_func):
         self.per_sample_seq_len_func = per_sample_seq_len_func
 
+    def _check_has_per_sample_seq_len_func(self, name):
+        assert hasattr(self, 'per_sample_seq_len_func'), \
+            f"set_per_sample_seq_len_func() must be called before {name}"
+
+    def get_padding_efficiency(self):
+        self._check_has_per_sample_seq_len_func("get_padding_efficiency()")
+        total_actual_input_tokens = 0
+        total_padded_input_tokens = 0
+        total_actual_target_tokens = 0
+        total_padded_target_tokens = 0
+        for idx in range(len(self)):
+            actual_input_seq_len = 0
+            if self.packed:
+                for (_, _, seq_len) in self.packed_samples[idx]:
+                    actual_input_seq_len += seq_len
+            else:
+                _, _, seq_len = self.samples_mapping[idx]
+                actual_input_seq_len += seq_len
+            actual_target_seq_len = int(actual_input_seq_len * self.masked_lm_prob)
+            total_actual_input_tokens += actual_input_seq_len
+            total_actual_target_tokens += actual_target_seq_len
+            bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
+            total_padded_input_tokens += bucket_length
+            total_padded_target_tokens += dec_bucket_length
+        return (total_actual_input_tokens / total_padded_input_tokens,
+                total_actual_target_tokens / total_padded_target_tokens)
+
     def __len__(self):
         if self.packed:
             return len(self.packed_samples)
@@ -139,8 +166,7 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
             return self.samples_mapping.shape[0]
 
     def __getitem__(self, idx):
-        assert hasattr(self, 'per_sample_seq_len_func'), \
-            "set_per_sample_seq_len_func() must be called before __getitem__()"
+        self._check_has_per_sample_seq_len_func("__getitem__()")
         sample = []
         if self.packed:
             for (start_index, end_index, _) in self.packed_samples[idx]:
@@ -261,9 +287,39 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         else:
             return self.input_samples_mapping.shape[0]
 
-    def __getitem__(self, idx):
+    def _check_has_per_sample_seq_len_func(self, name):
         assert hasattr(self, 'per_sample_seq_len_func'), \
-            "set_per_sample_seq_len_func() must be called before __getitem__()"
+            f"set_per_sample_seq_len_func() must be called before {name}"
+
+    def get_padding_efficiency(self):
+        self._check_has_per_sample_seq_len_func("get_padding_efficiency()")
+        total_actual_input_tokens = 0
+        total_padded_input_tokens = 0
+        total_actual_target_tokens = 0
+        total_padded_target_tokens = 0
+        for idx in range(len(self)):
+            actual_input_seq_len = 0
+            actual_target_seq_len = 0
+            if self.packed:
+                for (_, _, seq_len) in self.packed_input_samples[idx]:
+                    actual_input_seq_len += seq_len
+                for (_, _, seq_len) in self.packed_target_samples[idx]:
+                    actual_target_seq_len += seq_len
+            else:
+                _, _, seq_len = self.input_samples_mapping[idx]
+                actual_input_seq_len = seq_len
+                _, _, seq_len = self.target_samples_mapping[idx]
+                actual_target_seq_len = seq_len
+            total_actual_input_tokens += actual_input_seq_len
+            total_actual_target_tokens += actual_target_seq_len
+            bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
+            total_padded_input_tokens += bucket_length
+            total_padded_target_tokens += dec_bucket_length
+        return (total_actual_input_tokens / total_padded_input_tokens,
+                total_actual_target_tokens / total_padded_target_tokens)
+
+    def __getitem__(self, idx):
+        self._check_has_per_sample_seq_len_func("__getitem__()")
         input_sample = []
         target_sample = []
         if self.packed:

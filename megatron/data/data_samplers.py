@@ -211,6 +211,8 @@ class MegatronPretrainingRandomSampler:
         ), "data_parallel_rank should be smaller than data size: {}, " "{}".format(
             self.data_parallel_rank, data_parallel_size
         )
+        if isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
+            self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
 
     def __len__(self):
         return self.total_samples

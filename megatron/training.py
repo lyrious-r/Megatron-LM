@@ -52,6 +52,7 @@ from megatron.utils import calc_params_l2_norm
 from megatron.schedules import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
+from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
 
 
 def print_datetime(string):
@@ -940,6 +941,11 @@ def build_train_valid_test_data_iterators(
         valid_dataloader, valid_shape_iterator, _ = build_pretraining_data_loader(
             valid_ds, args.consumed_valid_samples)
         test_dataloader, test_shape_iterator, _ = build_pretraining_data_loader(test_ds, 0)
+        if isinstance(train_ds, (T5UnsupervisedDataset, T5SupervisedDataset)):
+            input_padding_eff, target_padding_eff = train_ds.get_padding_efficiency()
+            print_rank_0(' > training set padding efficiency:')
+            print_rank_0('    input:      {}'.format(input_padding_eff))
+            print_rank_0('    target:     {}'.format(target_padding_eff))
 
         # Flags to know if we need to do training/validation/testing.
         do_train = train_dataloader is not None and args.train_iters > 0
