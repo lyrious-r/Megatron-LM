@@ -444,6 +444,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         #         self._per_seq_len_bucket_start_indices[bucket_idx + 1] = end_idx
 
         self._batches = []
+        consumed_tokens_include_padding = 0
         current_batch_start_idx = 0
         current_batch_size = 0
         current_batch_input_seq_len = 0
@@ -456,12 +457,19 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         global_batch_start_boundaries = []
         per_global_batch_enc_dec_seq_lengths = []
 
+        if args.assume_perfect_batching:
+            total_tokens = 0
+            for idx in range(self.total_samples):
+                input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
+                total_tokens += input_seq_len
+
         def _append_batch(start_idx, curr_idx):
             nonlocal adusted_total_samples
             nonlocal n_global_batches
             nonlocal num_micro_batches_per_global_batch
             nonlocal current_batch_input_seq_len
             nonlocal current_batch_target_seq_len
+            nonlocal consumed_tokens_include_padding
             adusted_total_samples += curr_idx - start_idx
             n_microbatches = (curr_idx - start_idx) // self.micro_batch_size
             n_microbatches_per_rank = n_microbatches // self.data_parallel_size
@@ -480,6 +488,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             per_global_batch_enc_dec_seq_lengths.append(
                 (current_batch_input_seq_len, current_batch_target_seq_len)
             )
+            consumed_tokens_include_padding += current_batch_size * current_batch_input_seq_len
 
         for idx in range(self.total_samples):
             current_batch_tokens = current_batch_size * current_batch_input_seq_len
@@ -497,12 +506,15 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 current_batch_size = 0
                 current_batch_input_seq_len = 0
                 current_batch_target_seq_len = 0
+                if args.assume_perfect_batching and consumed_tokens_include_padding >= total_tokens:
+                    self.total_samples = adusted_total_samples
+                    break
             # append to current batch
             current_batch_size += 1
             current_batch_input_seq_len = max(current_batch_input_seq_len, input_seq_len)
             current_batch_target_seq_len = max(current_batch_target_seq_len, target_seq_len)
         # create the last batch
-        if (idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0:
+        if not args.assume_perfect_batching and (idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0:
             _append_batch(current_batch_start_idx, idx)
 
         self.last_batch_size = self.total_samples - adusted_total_samples

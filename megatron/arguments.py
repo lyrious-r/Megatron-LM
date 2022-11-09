@@ -605,6 +605,8 @@ def _add_training_args(parser):
                        help='Dynamic batch size level (batch or microbatch)')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
+    group.add_argument('--assume-perfect-batching', action="store_true",
+                       help='Assume perfect batching for dynamic batch size, only used to get theoretical throughput upper bound')
     group.add_argument('--memory-model', type=str, default='fixed',
                        choices=['fixed', 'plopt', 'product'],
                        help='The memory model used to determine the microbatch size')
