@@ -27,7 +27,7 @@ from megatron.data.dataset_utils import (
     get_samples_mapping_supervised
 )
 
-def pack_samples(input_samples_mapping, max_seq_len_input,
+def run_pack_samples(input_samples_mapping, max_seq_len_input,
                   target_samples_mapping=None, max_seq_len_target=None):
     """Pack multiple samples into a single sequence."""
     # each sample is a list of tuples (start_idx, end_idx, seq_len)
@@ -101,7 +101,7 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
                                                    False,
                                                    sort_samples=sort_samples)
         if pack_samples:
-            self.packed_samples, _ = pack_samples(self.samples_mapping,
+            self.packed_samples, _ = run_pack_samples(self.samples_mapping,
                                                self.max_seq_length)
 
         # Vocab stuff.
@@ -235,7 +235,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                                                             sort_samples=sort_samples)
 
         if pack_samples:
-            self.packed_input_samples, self.packed_target_samples = pack_samples(
+            self.packed_input_samples, self.packed_target_samples = run_pack_samples(
                                                self.input_samples_mapping,
                                                self.max_seq_length,
                                                self.target_samples_mapping,
@@ -307,9 +307,9 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                     actual_target_seq_len += seq_len
             else:
                 _, _, seq_len = self.input_samples_mapping[idx]
-                actual_input_seq_len = seq_len
+                actual_input_seq_len = min(seq_len, self.max_seq_length)
                 _, _, seq_len = self.target_samples_mapping[idx]
-                actual_target_seq_len = seq_len
+                actual_target_seq_len = min(seq_len, self.max_seq_length_dec)
             total_actual_input_tokens += actual_input_seq_len
             total_actual_target_tokens += actual_target_seq_len
             bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
@@ -344,7 +344,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         return build_supervised_training_sample(input_sample,
                                      target_sample,
                                      bucket_length,
-                                     dec_bucket_length - 2,
+                                     dec_bucket_length,
                                      self.vocab_id_list,
                                      self.vocab_id_to_token_dict,
                                      self.cls_id, self.sep_id,
@@ -456,7 +456,7 @@ def build_supervised_training_sample(input_sample, target_sample,
     input_truncated = len(input_tokens) > input_max_num_tokens
     input_tokens = input_tokens[:input_max_num_tokens]
 
-    target_max_num_tokens = max_seq_length_dec
+    target_max_num_tokens = max_seq_length_dec - 2
     target_truncated = len(target_tokens) > target_max_num_tokens
     target_tokens = target_tokens[:target_max_num_tokens]
 

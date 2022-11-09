@@ -421,6 +421,7 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     skip_warmup, binary_head=False,
                                     max_seq_length_dec=None,
                                     dataset_type='standard_bert',
+                                    num_epochs=None,
                                     sort_samples=False,
                                     pack_samples=False):
 
@@ -434,6 +435,7 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                                 binary_head,
                                                 max_seq_length_dec,
                                                 dataset_type=dataset_type,
+                                                num_epochs=num_epochs,
                                                 sort_samples=sort_samples,
                                                 pack_samples=pack_samples)
     # Blending dataset.
@@ -451,7 +453,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             prefixes[i], data_impl, splits_string,
             datasets_train_valid_test_num_samples[i],
             max_seq_length, masked_lm_prob, short_seq_prob,
-            seed, skip_warmup, binary_head, dataset_type=dataset_type, sort_samples=sort_samples, pack_samples=pack_samples)
+            seed, skip_warmup, binary_head, dataset_type=dataset_type, 
+            num_epochs=num_epochs, sort_samples=sort_samples, pack_samples=pack_samples)
         if train_ds:
             train_datasets.append(train_ds)
         if valid_ds:
@@ -481,6 +484,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                      skip_warmup, binary_head,
                                      max_seq_length_dec,
                                      dataset_type='standard_bert',
+                                     num_epochs=None,
                                      sort_samples=False,
                                      pack_samples=False):
 
@@ -503,6 +507,9 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
         target_dataset = get_indexed_dataset_(args.targets_data_path,
                                               data_impl,
                                               skip_warmup)
+        assert indexed_dataset.doc_idx.shape[0] == target_dataset.doc_idx.shape[0], \
+            "Source and target datasets must have the same number of documents ({} vs {})".format(
+                indexed_dataset.doc_idx.shape[0], target_dataset.doc_idx.shape[0])
 
     # Get start and end indices of train/valid/train into doc-idx
     # Note that doc-idx is desinged to be num-docs + 1 so we can
@@ -548,7 +555,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             kwargs = dict(
                 name=name,
                 data_prefix=data_prefix,
-                num_epochs=None,
+                num_epochs=num_epochs,
                 max_num_samples=train_valid_test_num_samples[index],
                 max_seq_length=max_seq_length,
                 seed=seed,
@@ -587,8 +594,8 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                 )
             elif dataset_type == DSET_TYPE_T5_SUPERVISED:
                 dataset = T5SupervisedDataset(
-                    indexed_dataset=indexed_dataset,
-                    target_dataset=target_dataset,
+                    input_indexed_dataset=indexed_dataset,
+                    target_indexed_dataset=target_dataset,
                     max_seq_length_dec=max_seq_length_dec,
                     **kwargs
                 )
@@ -602,11 +609,15 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             # Checks.
             assert indexed_dataset.doc_idx[0] == 0
             assert indexed_dataset.doc_idx.shape[0] == \
-                (total_num_of_documents + 1)
+                (total_num_of_documents + 1), \
+                "doc_idx.shape[0] ({}) != total_num_of_documents + 1 ({})".format(
+                    indexed_dataset.doc_idx.shape[0], total_num_of_documents + 1)
             if dataset_type == DSET_TYPE_T5_SUPERVISED:
                 assert target_dataset.doc_idx[0] == 0
                 assert target_dataset.doc_idx.shape[0] == \
-                    (total_num_of_documents + 1)
+                    (total_num_of_documents + 1), \
+                    "doc_idx.shape[0] ({}) != total_num_of_documents + 1 ({})".format(
+                        target_dataset.doc_idx.shape[0], total_num_of_documents + 1)
         return dataset
 
     train_dataset = build_dataset(0, 'train')
@@ -853,14 +864,16 @@ def get_samples_mapping_supervised(
         torch.distributed.get_world_size(group=mpu.get_tensor_model_parallel_group()))
 
     # Load indexed dataset.
-    print_rank_0(' > loading indexed mapping from {}'.format(
-        input_indexmap_filename))
+    print_rank_0(' > loading indexed mapping from {} and {}'.format(
+        input_indexmap_filename, target_indexmap_filename))
     start_time = time.time()
     samples_mapping = np.load(input_indexmap_filename, allow_pickle=True, mmap_mode='r')
     target_samples_mapping = np.load(target_indexmap_filename, allow_pickle=True, mmap_mode='r')
     print_rank_0('    loaded indexed files in {:3.3f} seconds'.format(
         time.time() - start_time))
-    print_rank_0('    total number of samples: {}'.format(
+    print_rank_0('    total number of input samples: {}'.format(
         samples_mapping.shape[0]))
+    print_rank_0('    total number of target samples: {}'.format(
+        target_samples_mapping.shape[0]))
 
     return samples_mapping, target_samples_mapping

@@ -574,3 +574,5 @@ class MMapIndexedDatasetBuilder(object):
 
         with MMapIndexedDataset.Index.writer(index_file, self._dtype) as index:
             index.write(self._sizes, self._doc_idx)
+
+        print("Written index file with {} entries".format(len(self._doc_idx)))

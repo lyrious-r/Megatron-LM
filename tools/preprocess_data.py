@@ -101,6 +101,8 @@ def get_args():
                        help='Split documents into sentences.')
     group.add_argument('--keep-newlines', action='store_true',
                        help='Keep newlines between sentences when splitting.')
+    group.add_argument('--is-supervised', action='store_true',
+                       help='Is a part of supervised dataset.')
 
     group = parser.add_argument_group(title='tokenizer')
     group.add_argument('--tokenizer-type', type=str, required=True,
@@ -186,6 +188,10 @@ def main():
         total_bytes_processed += bytes_processed
         for key, sentences in doc.items():
             if len(sentences) == 0:
+                print(f"WARNING: encountered empty document {i}.")
+                if args.is_supervised:
+                    builders[key].add_item(torch.IntTensor([tokenizer.pad]))
+                    builders[key].end_document()
                 continue
             for sentence in sentences:
                 builders[key].add_item(torch.IntTensor(sentence))

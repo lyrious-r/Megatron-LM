@@ -480,8 +480,8 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
 
         for idx in range(self.total_samples):
             current_batch_tokens = current_batch_size * current_batch_input_seq_len
-            input_seq_len = self.dataset.get_seq_len(idx)
-            target_seq_len = self.dataset.get_dec_seq_len(idx)
+            input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
+            target_seq_len = min(self.dataset.get_dec_seq_len(idx), self.dataset.max_seq_length_dec)
             # create a new batch if the current batch contains a multiple
             # of data_parallel_size * micro_batch_size samples, and
             # contains roughly _tokens_per_global_batch tokens
