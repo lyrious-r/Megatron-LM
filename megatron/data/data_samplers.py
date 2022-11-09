@@ -474,6 +474,9 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             self._batches.append(microbatches)
             global_batch_start_boundaries.append(start_idx)
             n_global_batches += 1
+            # round seq len to nearest multiple of 8
+            current_batch_input_seq_len = (current_batch_input_seq_len + 7) // 8 * 8
+            current_batch_target_seq_len = (current_batch_target_seq_len + 7) // 8 * 8
             per_global_batch_enc_dec_seq_lengths.append(
                 (current_batch_input_seq_len, current_batch_target_seq_len)
             )
