@@ -589,7 +589,7 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         for index, (model_index, dtype, gbuf, gbuf_views) \
             in enumerate(gbuf_view_items):
 
-            torch.distributed._all_gather_base(
+            torch.distributed.all_gather_into_tensor(
                 gbuf,
                 gbuf_views[data_parallel_rank],
                 group = data_parallel_group,
