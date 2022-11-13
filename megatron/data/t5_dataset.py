@@ -26,6 +26,7 @@ from megatron.data.dataset_utils import (
     get_samples_mapping,
     get_samples_mapping_supervised
 )
+from megatron.utils import print_rank_0
 
 def run_pack_samples(input_samples_mapping, max_seq_len_input,
                   target_samples_mapping=None, max_seq_len_target=None):
@@ -40,19 +41,25 @@ def run_pack_samples(input_samples_mapping, max_seq_len_input,
     curr_target_seq_len = 0
     curr_input_sequence = []
     curr_target_sequence = []
+    avg_samples_per_sequence = 0
+    total_enc_tokens = 0
+    total_dec_tokens = 0
     for idx in range(len(input_samples_mapping)):
         input_sample = input_samples_mapping[idx]
-        input_seq_len = input_sample[2]
+        input_seq_len = min(input_sample[2], max_seq_len_input)
+        total_enc_tokens += input_seq_len
         if target_samples_mapping is not None:
             target_sample = target_samples_mapping[idx]
-            target_seq_len = target_sample[2]
+            target_seq_len = min(target_sample[2], max_seq_len_target)
+            total_dec_tokens += target_seq_len
         if curr_input_seq_len + input_seq_len > max_seq_len_input or \
                 (target_samples_mapping is not None and curr_target_seq_len + target_seq_len > max_seq_len_target):
-            input_samples.append(curr_input_sequence)
+            input_samples.append(curr_input_sequence.copy())
+            avg_samples_per_sequence += len(curr_input_sequence)
             curr_input_seq_len = 0
             curr_input_sequence = []
             if target_samples_mapping is not None:
-                target_samples.append(curr_target_sequence)
+                target_samples.append(curr_target_sequence.copy())
                 curr_target_seq_len = 0
                 curr_target_sequence = []
         curr_input_seq_len += input_seq_len
@@ -63,8 +70,11 @@ def run_pack_samples(input_samples_mapping, max_seq_len_input,
     # last sequence
     if curr_input_seq_len > 0:
         input_samples.append(curr_input_sequence)
+        avg_samples_per_sequence += len(curr_input_sequence)
     if target_samples_mapping is not None and curr_target_seq_len > 0:
         target_samples.append(curr_target_sequence)
+    print_rank_0('>>>> Pack samples: {} input sequences, {} target sequences, avg samples per sequence: {}, enc batching eff: {}, dec batching eff: {}'.format(
+        len(input_samples), len(target_samples), avg_samples_per_sequence / len(input_samples), total_enc_tokens / (len(input_samples) * max_seq_len_input), total_dec_tokens / (len(target_samples) * max_seq_len_target)))
     return input_samples, target_samples
 
 
@@ -302,9 +312,9 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             actual_target_seq_len = 0
             if self.packed:
                 for (_, _, seq_len) in self.packed_input_samples[idx]:
-                    actual_input_seq_len += seq_len
+                    actual_input_seq_len += min(seq_len, self.max_seq_length)
                 for (_, _, seq_len) in self.packed_target_samples[idx]:
-                    actual_target_seq_len += seq_len
+                    actual_target_seq_len += min(seq_len, self.max_seq_length_dec)
             else:
                 _, _, seq_len = self.input_samples_mapping[idx]
                 actual_input_seq_len = min(seq_len, self.max_seq_length)
