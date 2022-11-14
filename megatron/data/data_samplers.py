@@ -409,12 +409,23 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
             avg_input_seq_len += input_seq_len
             target_seq_len = min(self.dataset.get_dec_seq_len(idx), self.dataset.max_seq_length_dec)
+            if args.assume_perfect_batching:
+                input_seq_len = args.perfect_batching_seq_len
+                avg_input_seq_len += input_seq_len
+                target_seq_len = args.perfect_batching_seq_len
+                current_batch_tokens = current_batch_size * current_batch_input_padded_seq_len
+            else:
+                input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
+                avg_input_seq_len += input_seq_len
+                target_seq_len = min(self.dataset.get_dec_seq_len(idx), self.dataset.max_seq_length_dec)
             # create a new batch if the current batch contains a multiple
             # of data_parallel_size * micro_batch_size samples, and
             # contains roughly _tokens_per_global_batch tokens
+            seq_len_if_added = max(current_batch_input_padded_seq_len, input_seq_len)
+            tokens_if_added = (current_batch_size + 1) * seq_len_if_added if args.assume_perfect_batching else current_batch_tokens + input_seq_len
             if current_batch_tokens \
                 and ((idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0) \
-                and current_batch_tokens + input_seq_len >= self._tokens_per_global_batch:
+                and tokens_if_added >= self._tokens_per_global_batch:
                 # create a new batch
                 _append_batch(current_batch_start_idx, idx)
                 avg_global_batch_tokens += current_batch_tokens

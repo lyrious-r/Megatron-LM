@@ -211,6 +211,12 @@ def validate_args(args, defaults={}):
         assert args.tokens_per_global_batch is not None, \
             'dynamic batch size requires tokens-per-global-batch to be set'
 
+    if args.assume_perfect_batching:
+        assert args.dynamic_batchsize, \
+            'assume-perfect-batching only works with dynamic batch size'
+        assert args.perfect_batching_seq_len is not None, \
+            'assume-perfect-batching requires perfect-batching-seq-len to be set'
+
     # Consumed tokens.
     args.consumed_train_samples = 0
     args.consumed_valid_samples = 0
@@ -607,6 +613,10 @@ def _add_training_args(parser):
                         help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--assume-perfect-batching', action="store_true",
                        help='Assume perfect batching for dynamic batch size, only used to get theoretical throughput upper bound')
+    group.add_argument('--perfect-batching-seq-len', type=int,
+                       help='The sequence length to use when assuming perfect batching.'
+                            'Different from the actual sequence length used for training,'
+                            'this will not affect the total number of tokens in a epoch.')
     group.add_argument('--memory-model', type=str, default='fixed',
                        choices=['fixed', 'plopt', 'product'],
                        help='The memory model used to determine the microbatch size')
