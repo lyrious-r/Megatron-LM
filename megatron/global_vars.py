@@ -286,6 +286,24 @@ class Timers:
         else:
             print(string, flush=True)
 
+    def log_all_ranks(self, names, normalizer=1.0, reset=True):
+        """Log a group of timers on all ranks, in order."""
+        assert normalizer > 0.0
+        string = 'time (ms)'
+        for name in names:
+            elapsed_time = self.timers[name].elapsed(
+                reset=reset) * 1000.0 / normalizer
+            string += ' | {}: {:.2f}'.format(name, elapsed_time)
+        if torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+            world_size = torch.distributed.get_world_size()
+            for i in range(world_size):
+                if rank == i:
+                    print(string, flush=True)
+                torch.distributed.barrier()
+        else:
+            print(string, flush=True)
+
     def log_all(self, normalizer=1.0, reset=True):
         names = []
         for name in self.timers.keys():

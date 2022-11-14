@@ -217,6 +217,13 @@ def validate_args(args, defaults={}):
         assert args.perfect_batching_seq_len is not None, \
             'assume-perfect-batching requires perfect-batching-seq-len to be set'
 
+    if args.benchmark_microbatch_execution_time:
+        assert args.dynamic_batchsize, \
+            'benchmark-microbatch-execution-time only works with dynamic batch size'
+        assert args.perfect_batching_seq_len is not None, \
+            'benchmark-microbatch-execution-time requires perfect-batching-seq-len to be set'
+        args.log_interval = 1
+
     # Consumed tokens.
     args.consumed_train_samples = 0
     args.consumed_valid_samples = 0
@@ -604,6 +611,10 @@ def _add_training_args(parser):
                        help='Sort the dataset by sequence length')
     group.add_argument('--pack-dataset', action='store_true',
                         help='Pack multiple samples in to a single sequence.')
+    group.add_argument('--benchmark-microbatch-execution-time', action='store_true',
+                       help='Benchmark microbatch execution time.')
+    group.add_argument('--benchmark-microbatch-iters', type=int, default=50,
+                       help='Benchmark microbatch execution time.')
     group.add_argument('--dynamic-batchsize', action="store_true",
                        help='Use dynamic batch size for training')
     group.add_argument('--dynamic-batch-level', type=str, default='batch',

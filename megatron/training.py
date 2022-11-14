@@ -658,7 +658,10 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             # Report memory after optimizer state has been initialized.
             report_memory('(after {} iterations)'.format(iteration))
             report_memory_flag = False
-        timers.log(timers_to_log, normalizer=args.log_interval)
+        if args.benchmark_microbatch_execution_time:
+            timers.log_all_ranks(timers_to_log, normalizer=args.log_interval)
+        else:
+            timers.log(timers_to_log, normalizer=args.log_interval)
 
     return report_memory_flag
 

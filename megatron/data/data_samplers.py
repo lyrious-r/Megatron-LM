@@ -360,6 +360,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         current_batch_start_idx = 0
         current_batch_size = 0
         current_batch_input_padded_seq_len = 0
+        padded_input_sequence_lengths = []
         current_batch_target_padded_seq_len = 0
         adusted_total_samples = 0
         n_global_batches = 0
@@ -391,6 +392,10 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 mb_start_idx = start_idx + self.data_parallel_rank * n_microbatches_per_rank + m * self.micro_batch_size
                 mb_end_idx = mb_start_idx + self.micro_batch_size
                 microbatches.append((mb_start_idx, mb_end_idx))
+            if args.benchmark_microbatch_execution_time:
+                # we want to measure the time it takes to execute a single microbatch
+                microbatches = microbatches[:1]
+                num_micro_batches_per_global_batch[-1] = 1
             self._batches.append(microbatches)
             global_batch_start_boundaries.append(start_idx)
             n_global_batches += 1
@@ -400,6 +405,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             per_global_batch_enc_dec_seq_lengths.append(
                 (current_batch_input_padded_seq_len, current_batch_target_padded_seq_len)
             )
+            padded_input_sequence_lengths.append(current_batch_input_padded_seq_len)
             consumed_tokens_include_padding += current_batch_size * current_batch_input_padded_seq_len
 
         avg_global_batch_tokens = 0
@@ -448,10 +454,22 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             avg_global_batch_tokens += current_batch_tokens
 
         self.last_batch_size = self.total_samples - adusted_total_samples
-        print_rank_0("INFO: adjusted total samples from {} to {}. Data wasted: {} ({:.2f}%).".format(self.total_samples, adusted_total_samples, self.last_batch_size, self.last_batch_size / self.total_samples * 100))
+        if args.benchmark_microbatch_execution_time:
+            # only execute first benchmark_microbatch_iters iterations
+            self._batches = self._batches[:args.benchmark_microbatch_iters]
+            n_global_batches = len(self._batches)
+        else:
+            print_rank_0("INFO: adjusted total samples from {} to {}. Data wasted: {} ({:.2f}%).".format(self.total_samples, adusted_total_samples, self.last_batch_size, self.last_batch_size / self.total_samples * 100))
         print_rank_0(">> Dynamic batch stats:")
         print_rank_0(">> Target tokens per global batch: {}, Avg. tokens per global batch: {}, avg input seq len: {}".format(self._tokens_per_global_batch, avg_global_batch_tokens / n_global_batches, avg_input_seq_len / adusted_total_samples))
         print_rank_0(">> {} total global batches, avg. {:.2f} microbatches per global batch, {} samples per microbatch.".format(n_global_batches, sum(num_micro_batches_per_global_batch) / len(num_micro_batches_per_global_batch), self.micro_batch_size))
+        for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
+            n_batches = 0
+            for x in padded_input_sequence_lengths:
+                if x >= print_seq_len:
+                    n_batches += 1
+            if n_batches > 0:
+                print_rank_0(">> {} batches have sequence length >= {}.".format(n_batches, print_seq_len))
 
         def per_sample_seq_len_func(idx):
             global_batch_id = bisect.bisect_right(global_batch_start_boundaries, idx) - 1
