@@ -163,7 +163,7 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
             actual_target_seq_len = int(actual_input_seq_len * self.masked_lm_prob)
             total_actual_input_tokens += actual_input_seq_len
             total_actual_target_tokens += actual_target_seq_len
-            bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
+            bucket_length, dec_bucket_length, _ = self.per_sample_seq_len_func(idx)
             total_padded_input_tokens += bucket_length
             total_padded_target_tokens += dec_bucket_length
         return (total_actual_input_tokens / total_padded_input_tokens,
@@ -187,7 +187,7 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
             start_index, end_index, _ = self.samples_mapping[idx]
             for index in range(start_index, end_index):
                 sample.append(self.indexed_dataset[index])
-        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
+        bucket_length, dec_bucket_length, _ = self.per_sample_seq_len_func(idx)
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))
@@ -210,13 +210,15 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                  data_prefix,
                  num_epochs, max_num_samples,
                  max_seq_length, max_seq_length_dec,
-                 seed, sort_samples=False, pack_samples=False):
+                 seed, sort_samples=False, pack_samples=False, 
+                 pad_samples=True):
 
         # Params to store.
         self.name = name
         self.seed = seed
         self.sorted = sort_samples
         self.packed = pack_samples
+        self.padded = pad_samples
         self.supervised = True
         self.ordered = True
         self.max_seq_length = max_seq_length
@@ -225,6 +227,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.target_max_seq_length = -1
         self.input_seq_lengths = None
         self.target_seq_lengths = None
+        self.adjusted_num_samples = None
 
         # Dataset.
         self.input_indexed_dataset = input_indexed_dataset
@@ -291,6 +294,9 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
     def set_per_sample_seq_len_func(self, per_sample_seq_len_func):
         self.per_sample_seq_len_func = per_sample_seq_len_func
 
+    def set_adjusted_num_samples(self, adjusted_num_samples):
+        self.adjusted_num_samples = adjusted_num_samples
+
     def __len__(self):
         if self.packed:
             return len(self.packed_input_samples)
@@ -307,7 +313,9 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         total_padded_input_tokens = 0
         total_actual_target_tokens = 0
         total_padded_target_tokens = 0
-        for idx in range(len(self)):
+        assert self.adjusted_num_samples is not None, \
+            "set_adjusted_num_samples() must be called before get_padding_efficiency()"
+        for idx in range(self.adjusted_num_samples):
             actual_input_seq_len = 0
             actual_target_seq_len = 0
             if self.packed:
@@ -322,13 +330,59 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                 actual_target_seq_len = min(seq_len, self.max_seq_length_dec)
             total_actual_input_tokens += actual_input_seq_len
             total_actual_target_tokens += actual_target_seq_len
-            bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
-            total_padded_input_tokens += bucket_length
-            total_padded_target_tokens += dec_bucket_length
+            bucket_length, dec_bucket_length, is_packed_by_dyn_mbs = self.per_sample_seq_len_func(idx)
+            if not is_packed_by_dyn_mbs:
+                total_padded_input_tokens += bucket_length
+                total_padded_target_tokens += dec_bucket_length
         return (total_actual_input_tokens / total_padded_input_tokens,
                 total_actual_target_tokens / total_padded_target_tokens)
 
+    def dynamic_microbatch_collate_fn(self, batch):
+        from torch.utils.data import default_collate
+        samples = []
+        current_sequence = []
+        for sample in batch:
+            if sample is None:
+                assert len(current_sequence) > 0
+                samples.append(current_sequence)
+            else:
+                current_sequence.append(sample)
+        if len(current_sequence) > 0:
+            samples.append(current_sequence)
+        packed_samples = []
+        for sequence in samples:
+            concated_input_sequence = []
+            concated_target_sequence = []
+            enc_seq_len = 0
+            dec_seq_len = 0
+            for sample in sequence:
+                concated_input_sequence.append(sample["text_enc"])
+                concated_target_sequence.append(sample["text_dec"])
+                if enc_seq_len == 0:
+                    enc_seq_len = sample["enc_seqlen"]
+                else:
+                    assert enc_seq_len == sample["enc_seqlen"]
+                if dec_seq_len == 0:
+                    dec_seq_len = sample["dec_seqlen"]
+                else:
+                    assert dec_seq_len == sample["dec_seqlen"]
+            packed_sample = build_supervised_training_sample(
+                concated_input_sequence,
+                concated_target_sequence,
+                enc_seq_len,
+                dec_seq_len,
+                self.pad_id,
+                self.bos_id,
+                self.eos_id,
+                self.sentinel_tokens
+            )
+            packed_samples.append(packed_sample)
+        return default_collate(packed_samples)
+
     def __getitem__(self, idx):
+        if idx == -1:
+            # for dynamic microbatch size
+            return None
         self._check_has_per_sample_seq_len_func("__getitem__()")
         input_sample = []
         target_sample = []
@@ -347,21 +401,21 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             for index in range(target_start_index, target_end_index):
                 target_sample.append(self.target_indexed_dataset[index])
 
-        bucket_length, dec_bucket_length = self.per_sample_seq_len_func(idx)
+        bucket_length, dec_bucket_length, _ = self.per_sample_seq_len_func(idx)
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
-        np_rng = np.random.RandomState(seed=(self.seed + idx))
-        return build_supervised_training_sample(input_sample,
-                                     target_sample,
-                                     bucket_length,
-                                     dec_bucket_length,
-                                     self.vocab_id_list,
-                                     self.vocab_id_to_token_dict,
-                                     self.cls_id, self.sep_id,
-                                     self.mask_id, self.pad_id,
-                                     np_rng,
-                                     self.bos_id, self.eos_id,
-                                     self.sentinel_tokens)
+        # np_rng = np.random.RandomState(seed=(self.seed + idx))
+        if self.padded:
+            return build_supervised_training_sample(input_sample,
+                                        target_sample,
+                                        bucket_length,
+                                        dec_bucket_length,
+                                        self.pad_id,
+                                        self.bos_id,
+                                        self.eos_id,
+                                        self.sentinel_tokens)
+        else:
+            return build_unpadded_sample(input_sample, target_sample, bucket_length, dec_bucket_length)
 
 
 def build_training_sample(sample, target_seq_length,
@@ -430,11 +484,8 @@ def build_training_sample(sample, target_seq_length,
     return train_sample
 
 def build_supervised_training_sample(input_sample, target_sample, 
-                                    max_seq_length, max_seq_length_dec,
-                                    vocab_id_list, vocab_id_to_token_dict,
-                                    cls_id, sep_id, mask_id, pad_id,
-                                    np_rng, bos_id=None,
-                                    eos_id=None, sentinel_tokens=None):
+                                    max_seq_length, max_seq_length_dec, pad_id,
+                                    bos_id=None, eos_id=None, sentinel_tokens=None):
     """Build training sample.
 
     Arguments:
@@ -487,6 +538,27 @@ def build_supervised_training_sample(input_sample, target_sample,
         'enc_mask': enc_mask,
         'dec_mask': dec_mask,
         'enc_dec_mask': enc_dec_mask,
+    }
+    return train_sample
+
+def build_unpadded_sample(input_sample, target_sample, 
+                            max_seq_length, max_seq_length_dec):
+    # flatten sentences into one list
+    input_tokens = [token for sentence in input_sample for token in sentence]
+    target_tokens = [token for sentence in target_sample for token in sentence]
+
+    # Truncate to `max_seq_length`.
+    input_max_num_tokens = max_seq_length
+    input_tokens = input_tokens[:input_max_num_tokens]
+
+    target_max_num_tokens = max_seq_length_dec - 2
+    target_tokens = target_tokens[:target_max_num_tokens]
+
+    train_sample = {
+        'text_enc': input_tokens,
+        'text_dec': target_tokens,
+        'enc_seqlen': max_seq_length,
+        'dec_seqlen': max_seq_length_dec,
     }
     return train_sample
 

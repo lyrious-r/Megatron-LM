@@ -26,8 +26,10 @@ from megatron import mpu
 from megatron import get_num_microbatches
 from megatron.utils import print_rank_0
 from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
+from megatron.data.data_utils import DynamicBatchingLevel
 
 from plopt.memory_utils import InvTransformerMemoryModel
+from plopt.stage_cost_model import StageCostModel
 
 
 def build_pretraining_data_loader(dataset, consumed_samples):
@@ -84,12 +86,21 @@ def build_pretraining_data_loader(dataset, consumed_samples):
         )
 
     # Torch dataloader.
-    return torch.utils.data.DataLoader(
-        dataset,
-        batch_sampler=batch_sampler,
-        num_workers=args.num_workers,
-        pin_memory=True,
-    ), shape_iterator, n_iters_per_epoch
+    if isinstance(dataset, T5SupervisedDataset) and not dataset.padded:
+        collate_fn = dataset.dynamic_microbatch_collate_fn
+    else:
+        collate_fn = None
+    return (
+        torch.utils.data.DataLoader(
+            dataset,
+            batch_sampler=batch_sampler,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+            pin_memory=True,
+        ),
+        shape_iterator,
+        n_iters_per_epoch,
+    )
 
 
 class MegatronPretrainingSampler:
@@ -212,7 +223,9 @@ class MegatronPretrainingRandomSampler:
             self.data_parallel_rank, data_parallel_size
         )
         if isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
-            self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
+            self.dataset.set_per_sample_seq_len_func(
+                lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec, False)
+            )
 
     def __len__(self):
         return self.total_samples
@@ -260,12 +273,14 @@ class MegatronPretrainingRandomSampler:
                 yield batch
                 batch = []
 
-class ShapeIterator():
+
+class ShapeIterator:
     def __init__(self, shape_generator):
         self.shape_generator = shape_generator
 
     def __iter__(self):
         return self.shape_generator()
+
 
 class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
     def __init__(
@@ -278,13 +293,8 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         data_parallel_size,
         data_sharding,
         dynamic_batchsize=False,
-        dynamic_batch_level='batch',
+        dynamic_batch_level=DynamicBatchingLevel.BATCH,
         tokens_per_global_batch=None,
-        # seq_len_buckets=None,
-        # dec_seq_len_buckets=None,
-        # microbatch_size_buckets=None,
-        # max_truncation_factor=0.05,
-        # min_truncation_seq_len=512,
     ):
         super().__init__(
             dataset,
@@ -295,7 +305,6 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             data_parallel_size,
             data_sharding,
         )
-        assert dynamic_batch_level == 'batch', 'Only batch level dynamic batching is supported'
         if not isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
             raise NotImplementedError(
                 "Only T5Dataset is supported for ordered sampler for now."
@@ -303,31 +312,41 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         assert (
             hasattr(dataset, "ordered") and dataset.ordered
         ), "Dataset should be ordered for ordered sampler."
-        self._global_batch_size_per_rank = get_num_microbatches() * self.micro_batch_size
-        self._global_batch_size = self._global_batch_size_per_rank * self.data_parallel_size
+        self._global_batch_size_per_rank = (
+            get_num_microbatches() * self.micro_batch_size
+        )
+        self._global_batch_size = (
+            self._global_batch_size_per_rank * self.data_parallel_size
+        )
         self._dynamic_batchsize = dynamic_batchsize
+        self._dynamic_batch_level = dynamic_batch_level
         if dynamic_batchsize:
-            assert tokens_per_global_batch is not None, "tokens_per_global_batch should be provided for dynamic batching"
+            assert (
+                tokens_per_global_batch is not None
+            ), "tokens_per_global_batch should be provided for dynamic batching"
             self._tokens_per_global_batch = tokens_per_global_batch
-        # self._seq_len_buckets = seq_len_buckets
-        # self._dec_seq_len_buckets = dec_seq_len_buckets
-        # self._microbatch_size_buckets = microbatch_size_buckets
-        # self._max_truncation_factor = max_truncation_factor
-        # self._min_truncation_seq_len = min_truncation_seq_len
+            if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+                args = get_args()
+                self._target_compute_efficiency = args.dynamic_batch_min_efficiency
+                self._stage_time_model = StageCostModel(args.dynamic_batch_profile_path)
         self._shape_consumed_samples = consumed_samples
         self._is_supervised_dataset = isinstance(dataset, T5SupervisedDataset)
         if dynamic_batchsize:
             self._precalc_batches()
         else:
-            self.dataset.set_per_sample_seq_len_func(lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec))
-    
+            self.dataset.set_per_sample_seq_len_func(
+                lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec, False)
+            )
+
     def _round_mbs(self, target_mbs):
-        mbs_bucket_idx = bisect.bisect_right(self._microbatch_size_buckets, target_mbs) - 1
+        mbs_bucket_idx = (
+            bisect.bisect_right(self._microbatch_size_buckets, target_mbs) - 1
+        )
         if mbs_bucket_idx < 1:
             mbs_bucket_idx = 1
         rounded_mbs = self._microbatch_size_buckets[mbs_bucket_idx]
         return rounded_mbs
-    
+
     def _get_seq_len_bucket_idx(self, seq_len, decoder=False):
         buckets = self._seq_len_buckets if not decoder else self._dec_seq_len_buckets
         bucket_idx = bisect.bisect_left(buckets, seq_len)
@@ -353,85 +372,197 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
     def _precalc_batches(self):
         assert self._dynamic_batchsize
         args = get_args()
-        assert args.memory_model == "fixed", "Only fixed micro-batch size is supported for dynamic batching for now."
+        assert (
+            args.memory_model == "fixed"
+        ), "Only fixed micro-batch size is supported for dynamic batching for now."
 
         self._batches = []
-        consumed_tokens_include_padding = 0
         current_batch_start_idx = 0
-        current_batch_size = 0
-        current_batch_input_padded_seq_len = 0
-        padded_input_sequence_lengths = []
-        current_batch_target_padded_seq_len = 0
-        adusted_total_samples = 0
+        adjusted_total_samples = 0
         n_global_batches = 0
         num_micro_batches_per_global_batch = []
+        # needed for microbatch level dynamic batching
+        avg_samples_per_microbatch = []
+        # needed for batch level dynamic batching
+        consumed_tokens_include_padding = 0
+        current_batch_input_padded_seq_len = 0
+        current_batch_target_padded_seq_len = 0
+        padded_input_sequence_lengths = []
+        # needed for assume perfect batching
+        current_batch_size = 0
 
-        # needed for per sample seq len func for dataset
+        # needed for per sample seq len func for dataset when using mini-batch
+        # level dynamic batching
         global_batch_start_boundaries = []
         per_global_batch_enc_dec_seq_lengths = []
+        # needed when using micro-batch level dynamic batching
+        per_sample_enc_dec_seq_lengths = [None] * self.total_samples
 
         if args.assume_perfect_batching:
             total_tokens = 0
             for idx in range(self.total_samples):
-                input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
+                input_seq_len = min(
+                    self.dataset.get_seq_len(idx), self.dataset.max_seq_length
+                )
                 total_tokens += input_seq_len
 
+        def _get_seq_len(sample_id):
+            if args.assume_perfect_batching:
+                input_seq_len = args.perfect_batching_seq_len
+                target_seq_len = args.perfect_batching_seq_len
+            else:
+                input_seq_len = min(
+                    self.dataset.get_seq_len(sample_id), self.dataset.max_seq_length
+                )
+                target_seq_len = min(
+                    self.dataset.get_dec_seq_len(sample_id),
+                    self.dataset.max_seq_length_dec,
+                )
+            return input_seq_len, target_seq_len
+
+        def _calc_batched_seqlen_for_mb_level_dbs(
+            sample_input_seqlens, sample_target_seqlens, indices
+        ):
+            padded_input_seqlens = []
+            padded_target_seqlens = []
+            for mb_indices in indices:
+                max_input_seqlen = -1
+                max_target_seqlen = -1
+                for samples in mb_indices:
+                    input_seqlen = sum([sample_input_seqlens[s] for s in samples])
+                    target_seqlen = sum([sample_target_seqlens[s] for s in samples])
+                    max_input_seqlen = max(max_input_seqlen, input_seqlen)
+                    max_target_seqlen = max(max_target_seqlen, target_seqlen)
+                max_target_seqlen += 2  # for bos and eos
+                # round up to nearest multiple of 8
+                max_input_seqlen = (max_input_seqlen + 7) // 8 * 8
+                max_target_seqlen = (max_target_seqlen + 7) // 8 * 8
+                padded_input_seqlens.append(max_input_seqlen)
+                padded_target_seqlens.append(max_target_seqlen)
+            return padded_input_seqlens, padded_target_seqlens
+
         def _append_batch(start_idx, curr_idx):
-            nonlocal adusted_total_samples
+            nonlocal adjusted_total_samples
             nonlocal n_global_batches
             nonlocal num_micro_batches_per_global_batch
             nonlocal current_batch_input_padded_seq_len
             nonlocal current_batch_target_padded_seq_len
             nonlocal consumed_tokens_include_padding
-            adusted_total_samples += curr_idx - start_idx
-            n_microbatches = (curr_idx - start_idx) // self.micro_batch_size
-            n_microbatches_per_rank = n_microbatches // self.data_parallel_size
-            num_micro_batches_per_global_batch.append(n_microbatches)
-            microbatches = []
-            for m in range(n_microbatches_per_rank):
-                mb_start_idx = start_idx + self.data_parallel_rank * n_microbatches_per_rank + m * self.micro_batch_size
-                mb_end_idx = mb_start_idx + self.micro_batch_size
-                microbatches.append((mb_start_idx, mb_end_idx))
+            nonlocal per_sample_enc_dec_seq_lengths
+            nonlocal avg_samples_per_microbatch
+            adjusted_total_samples += curr_idx - start_idx
+            if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+                # if dynamic batch level is microbatch, each microbatch is
+                # a list of list, outer: sequences, inner: samples packed
+                # into that sequence
+                sample_input_seqlens, sample_target_seqlens = zip(
+                    *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
+                )
+                sample_input_seqlens = list(sample_input_seqlens)
+                sample_target_seqlens = list(sample_target_seqlens)
+                indices = self._stage_time_model.generate_microbatches(
+                    sample_input_seqlens,
+                    min_compute_efficiency=self._target_compute_efficiency,
+                )
+                (
+                    padded_input_seqlens,
+                    padded_target_seqlens,
+                ) = _calc_batched_seqlen_for_mb_level_dbs(
+                    sample_input_seqlens, sample_target_seqlens, indices
+                )
+                microbatches = []
+                for i, mb_indices in enumerate(indices):
+                    mb = []
+                    num_samples = 0
+                    for samples in mb_indices:
+                        sequence = []
+                        for sample_idx, s in enumerate(samples):
+                            per_sample_enc_dec_seq_lengths[start_idx + s] = (
+                                padded_input_seqlens[i],
+                                padded_target_seqlens[i],
+                                sample_idx != 0
+                            )
+                            sequence.append(start_idx + s)
+                            num_samples += 1
+                        mb.append(sequence)
+                    microbatches.append(mb)
+                    avg_samples_per_microbatch.append(num_samples)
+                num_micro_batches_per_global_batch.append(len(microbatches))
+            else:
+                # if not using dynamic microbatching, each microbatch is
+                # just a tuple specifying the start and end sample index.
+                # use fixed microbatch size specified in the args without packing
+                n_microbatches = (curr_idx - start_idx) // self.micro_batch_size
+                n_microbatches_per_rank = n_microbatches // self.data_parallel_size
+                num_micro_batches_per_global_batch.append(n_microbatches)
+                microbatches = []
+                for m in range(n_microbatches_per_rank):
+                    mb_start_idx = (
+                        start_idx
+                        + self.data_parallel_rank * n_microbatches_per_rank
+                        + m * self.micro_batch_size
+                    )
+                    mb_end_idx = mb_start_idx + self.micro_batch_size
+                    microbatches.append((mb_start_idx, mb_end_idx))
             if args.benchmark_microbatch_execution_time:
                 # we want to measure the time it takes to execute a single microbatch
                 microbatches = microbatches[:1]
                 num_micro_batches_per_global_batch[-1] = 1
             self._batches.append(microbatches)
-            global_batch_start_boundaries.append(start_idx)
             n_global_batches += 1
-            # round seq len to nearest multiple of 8
-            current_batch_input_padded_seq_len = (current_batch_input_padded_seq_len + 7) // 8 * 8
-            current_batch_target_padded_seq_len = (current_batch_target_padded_seq_len + 7) // 8 * 8
-            per_global_batch_enc_dec_seq_lengths.append(
-                (current_batch_input_padded_seq_len, current_batch_target_padded_seq_len)
-            )
-            padded_input_sequence_lengths.append(current_batch_input_padded_seq_len)
-            consumed_tokens_include_padding += current_batch_size * current_batch_input_padded_seq_len
+
+            if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
+                global_batch_start_boundaries.append(start_idx)
+                # round seq len to nearest multiple of 8
+                current_batch_input_padded_seq_len = (
+                    (current_batch_input_padded_seq_len + 7) // 8 * 8
+                )
+                current_batch_target_padded_seq_len = (
+                    (current_batch_target_padded_seq_len + 7) // 8 * 8
+                )
+                per_global_batch_enc_dec_seq_lengths.append(
+                    (
+                        current_batch_input_padded_seq_len,
+                        current_batch_target_padded_seq_len,
+                    )
+                )
+                padded_input_sequence_lengths.append(current_batch_input_padded_seq_len)
+                consumed_tokens_include_padding += (
+                    current_batch_size * current_batch_input_padded_seq_len
+                )
 
         avg_global_batch_tokens = 0
         avg_input_seq_len = 0
         current_batch_tokens = 0
         for idx in range(self.total_samples):
-            input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
+            input_seq_len, target_seq_len = _get_seq_len(idx)
             avg_input_seq_len += input_seq_len
-            target_seq_len = min(self.dataset.get_dec_seq_len(idx), self.dataset.max_seq_length_dec)
             if args.assume_perfect_batching:
-                input_seq_len = args.perfect_batching_seq_len
-                avg_input_seq_len += input_seq_len
-                target_seq_len = args.perfect_batching_seq_len
-                current_batch_tokens = current_batch_size * current_batch_input_padded_seq_len
-            else:
-                input_seq_len = min(self.dataset.get_seq_len(idx), self.dataset.max_seq_length)
-                avg_input_seq_len += input_seq_len
-                target_seq_len = min(self.dataset.get_dec_seq_len(idx), self.dataset.max_seq_length_dec)
+                current_batch_tokens = (
+                    current_batch_size * current_batch_input_padded_seq_len
+                )
             # create a new batch if the current batch contains a multiple
             # of data_parallel_size * micro_batch_size samples, and
             # contains roughly _tokens_per_global_batch tokens
-            seq_len_if_added = max(current_batch_input_padded_seq_len, input_seq_len)
-            tokens_if_added = (current_batch_size + 1) * seq_len_if_added if args.assume_perfect_batching else current_batch_tokens + input_seq_len
-            if current_batch_tokens \
-                and ((idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0) \
-                and tokens_if_added >= self._tokens_per_global_batch:
+            if args.assume_perfect_batching:
+                seq_len_if_added = max(
+                    current_batch_input_padded_seq_len, input_seq_len
+                )
+                tokens_if_added = (current_batch_size + 1) * seq_len_if_added
+            else:
+                tokens_if_added = current_batch_tokens + input_seq_len
+            if (
+                # current batch is not empty
+                current_batch_tokens
+                # current batch contains a multiple of data_parallel_size * micro_batch_size samples
+                and (
+                    (idx - current_batch_start_idx)
+                    % (self.data_parallel_size * self.micro_batch_size)
+                    == 0
+                )
+                # contains roughly _tokens_per_global_batch tokens
+                and tokens_if_added >= self._tokens_per_global_batch
+            ):
                 # create a new batch
                 _append_batch(current_batch_start_idx, idx)
                 avg_global_batch_tokens += current_batch_tokens
@@ -440,41 +571,98 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 current_batch_tokens = 0
                 current_batch_input_padded_seq_len = 0
                 current_batch_target_padded_seq_len = 0
-                if args.assume_perfect_batching and consumed_tokens_include_padding >= total_tokens:
-                    self.total_samples = adusted_total_samples
+                if (
+                    args.assume_perfect_batching
+                    and consumed_tokens_include_padding >= total_tokens
+                ):
+                    self.total_samples = adjusted_total_samples
                     break
             # append to current batch
-            current_batch_size += 1
             current_batch_tokens += input_seq_len
-            current_batch_input_padded_seq_len = max(current_batch_input_padded_seq_len, input_seq_len)
-            current_batch_target_padded_seq_len = max(current_batch_target_padded_seq_len, target_seq_len)
+            if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
+                current_batch_size += 1
+                current_batch_input_padded_seq_len = max(
+                    current_batch_input_padded_seq_len, input_seq_len
+                )
+                current_batch_target_padded_seq_len = max(
+                    current_batch_target_padded_seq_len, target_seq_len
+                )
         # create the last batch
-        if not args.assume_perfect_batching and (idx - current_batch_start_idx) % (self.data_parallel_size * self.micro_batch_size) == 0:
+        if (
+            not args.assume_perfect_batching
+            and (idx - current_batch_start_idx)
+            % (self.data_parallel_size * self.micro_batch_size)
+            == 0
+        ):
             _append_batch(current_batch_start_idx, idx)
             avg_global_batch_tokens += current_batch_tokens
 
-        self.last_batch_size = self.total_samples - adusted_total_samples
+        self.last_batch_size = self.total_samples - adjusted_total_samples
         if args.benchmark_microbatch_execution_time:
             # only execute first benchmark_microbatch_iters iterations
-            self._batches = self._batches[:args.benchmark_microbatch_iters]
+            self._batches = self._batches[: args.benchmark_microbatch_iters]
             n_global_batches = len(self._batches)
         else:
-            print_rank_0("INFO: adjusted total samples from {} to {}. Data wasted: {} ({:.2f}%).".format(self.total_samples, adusted_total_samples, self.last_batch_size, self.last_batch_size / self.total_samples * 100))
+            print_rank_0(
+                "INFO: adjusted total samples from {} to {}. Data wasted: {} ({:.2f}%).".format(
+                    self.total_samples,
+                    adjusted_total_samples,
+                    self.last_batch_size,
+                    self.last_batch_size / self.total_samples * 100,
+                )
+            )
         print_rank_0(">> Dynamic batch stats:")
-        print_rank_0(">> Target tokens per global batch: {}, Avg. tokens per global batch: {}, avg input seq len: {}".format(self._tokens_per_global_batch, avg_global_batch_tokens / n_global_batches, avg_input_seq_len / adusted_total_samples))
-        print_rank_0(">> {} total global batches, avg. {:.2f} microbatches per global batch, {} samples per microbatch.".format(n_global_batches, sum(num_micro_batches_per_global_batch) / len(num_micro_batches_per_global_batch), self.micro_batch_size))
-        for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
-            n_batches = 0
-            for x in padded_input_sequence_lengths:
-                if x >= print_seq_len:
-                    n_batches += 1
-            if n_batches > 0:
-                print_rank_0(">> {} batches have sequence length >= {}.".format(n_batches, print_seq_len))
+        print_rank_0(
+            ">> Target tokens per global batch: {}, Avg. tokens per global batch: {}, avg input seq len: {}".format(
+                self._tokens_per_global_batch,
+                avg_global_batch_tokens / n_global_batches,
+                avg_input_seq_len / adjusted_total_samples,
+            )
+        )
+        if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+            n_samples_per_mb = sum(avg_samples_per_microbatch) / len(
+                avg_samples_per_microbatch
+            )
+        else:
+            n_samples_per_mb = self.micro_batch_size
+        print_rank_0(
+            ">> {} total global batches, avg. {:.2f} microbatches per global batch, {} samples per microbatch.".format(
+                n_global_batches,
+                sum(num_micro_batches_per_global_batch)
+                / len(num_micro_batches_per_global_batch),
+                n_samples_per_mb,
+            )
+        )
+        if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
+            for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
+                n_batches = 0
+                for x in padded_input_sequence_lengths:
+                    if x >= print_seq_len:
+                        n_batches += 1
+                if n_batches > 0:
+                    print_rank_0(
+                        ">> {} batches have sequence length >= {}.".format(
+                            n_batches, print_seq_len
+                        )
+                    )
+        if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+            # sanity check on per_sample_enc_dec_seq_lengths
+            for idx in range(adjusted_total_samples):
+                if per_sample_enc_dec_seq_lengths[idx] is None:
+                    raise ValueError("Invalid per_sample_enc_dec_seq_lengths at idx {}".format(idx))
 
         def per_sample_seq_len_func(idx):
-            global_batch_id = bisect.bisect_right(global_batch_start_boundaries, idx) - 1
-            return per_global_batch_enc_dec_seq_lengths[global_batch_id]
+            if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
+                global_batch_id = (
+                    bisect.bisect_right(global_batch_start_boundaries, idx) - 1
+                )
+                enc_seqlen, dec_seqlen = per_global_batch_enc_dec_seq_lengths[global_batch_id]
+                return enc_seqlen, dec_seqlen, False
+            else:
+                return per_sample_enc_dec_seq_lengths[idx]
+
         self.dataset.set_per_sample_seq_len_func(per_sample_seq_len_func)
+        self.dataset.set_adjusted_num_samples(adjusted_total_samples)
         self._per_sample_seq_len_func = per_sample_seq_len_func
 
     def _calc_sample_offsets(self, is_data_iterator=True):
@@ -491,13 +679,15 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
 
         if not self.data_sharding:
-            print(
+            print_rank_0(
                 "WARNING: data sharding must be enabled for sorted sampler. Ignoring setting."
             )
         return current_epoch_samples, epoch
 
     def _dynamic_size_get_batch_order(self, is_data_iterator=True):
-        current_epoch_samples, epoch = self._calc_sample_offsets(is_data_iterator=is_data_iterator)
+        current_epoch_samples, epoch = self._calc_sample_offsets(
+            is_data_iterator=is_data_iterator
+        )
         g = torch.Generator()
         g.manual_seed(epoch)
         n_global_batches = len(self._batches)
@@ -507,9 +697,20 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             microbatches = self._batches[batch_offset]
             if cumulative_samples < current_epoch_samples:
                 for microbatch in microbatches:
-                    cumulative_samples += (
-                        microbatch[1] - microbatch[0]
-                    ) * self.data_parallel_size
+                    if isinstance(microbatch, tuple):
+                        cumulative_samples += (
+                            microbatch[1] - microbatch[0]
+                        ) * self.data_parallel_size
+                    elif isinstance(microbatch, list):
+                        # dynamic microbatching
+                        for sample in microbatch:
+                            cumulative_samples += len(sample) * self.data_parallel_size
+                    else:
+                        raise TypeError(
+                            "microbatch must be a tuple or list, got {}".format(
+                                type(microbatch)
+                            )
+                        )
             else:
                 break
         return batch_order, batch_offset
@@ -522,14 +723,36 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             # generates (num_microbatches, mbs, enc_seq_len, dec_seq_len) tuples
             # need to call get_batch_order inside the generator to ensure
             # that shape iterator is in sync with the data iterator upon reset
-            batch_order, batch_offset = self._dynamic_size_get_batch_order(is_data_iterator=False)
+            batch_order, batch_offset = self._dynamic_size_get_batch_order(
+                is_data_iterator=False
+            )
             for batch_id in batch_order[batch_offset:]:
                 microbatches = self._batches[batch_id]
                 for mb in microbatches:
-                    batch_size = mb[1] - mb[0]
-                    enc_seq_len, dec_seq_len = self._per_sample_seq_len_func(mb[0])
-                    self._shape_consumed_samples += batch_size * self.data_parallel_size
+                    if isinstance(mb, tuple):
+                        batch_size = mb[1] - mb[0]
+                        enc_seq_len, dec_seq_len, _ = self._per_sample_seq_len_func(mb[0])
+                        self._shape_consumed_samples += (
+                            batch_size * self.data_parallel_size
+                        )
+                    elif isinstance(mb, list):
+                        # dynamic microbatching
+                        batch_size = len(mb)
+                        enc_seq_len, dec_seq_len, _ = self._per_sample_seq_len_func(
+                            mb[0][0]
+                        )
+                        for sample in mb:
+                            self._shape_consumed_samples += (
+                                len(sample) * self.data_parallel_size
+                            )
+                    else:
+                        raise TypeError(
+                            "microbatch must be a tuple or list, got {}".format(
+                                type(mb)
+                            )
+                        )
                     yield len(microbatches), batch_size, enc_seq_len, dec_seq_len
+
         return ShapeIterator(shape_generator)
 
     def __iter__(self):
@@ -538,9 +761,31 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             for batch_id in batch_order[batch_offset:]:
                 microbatches = self._batches[batch_id]
                 for mb in microbatches:
-                    sample_indices = [idx for idx in range(mb[0], mb[1])]
-                    self.consumed_samples += len(sample_indices) * self.data_parallel_size
-                    yield sample_indices
+                    if isinstance(mb, tuple):
+                        sample_indices = [idx for idx in range(mb[0], mb[1])]
+                        self.consumed_samples += (
+                            len(sample_indices) * self.data_parallel_size
+                        )
+                        yield sample_indices
+                    elif isinstance(mb, list):
+                        # dynamic microbatching. use -1 to delimit samples packed into
+                        # the same sequence
+                        sample_indices = []
+                        actual_samples_consumed = 0
+                        for sample in mb:
+                            sample_indices.extend(sample)
+                            actual_samples_consumed += len(sample)
+                            sample_indices.append(-1)
+                        self.consumed_samples += (
+                            actual_samples_consumed * self.data_parallel_size
+                        )
+                        yield sample_indices
+                    else:
+                        raise TypeError(
+                            "microbatch must be a tuple or list, got {}".format(
+                                type(mb)
+                            )
+                        )
         else:
             current_epoch_samples, epoch = self._calc_sample_offsets()
             g = torch.Generator()

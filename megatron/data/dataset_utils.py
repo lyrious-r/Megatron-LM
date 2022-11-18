@@ -33,6 +33,7 @@ from megatron import (
 )
 from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
+from megatron.data.data_utils import DynamicBatchingLevel
 
 DSET_TYPE_BERT = 'standard_bert'
 DSET_TYPE_ICT = 'ict'
@@ -563,6 +564,9 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             if dataset_type == DSET_TYPE_T5 or dataset_type == DSET_TYPE_T5_SUPERVISED:
                 kwargs["sort_samples"] = sort_samples
                 kwargs["pack_samples"] = pack_samples
+                if dataset_type == DSET_TYPE_T5_SUPERVISED:
+                    args = get_args()
+                    kwargs["pad_samples"] = not (args.dynamic_batchsize and args.dynamic_batch_level == DynamicBatchingLevel.MICROBATCH)
             elif sort_samples or pack_samples:
                 raise ValueError("sort_samples and pack_samples are only supported for T5 dataset type")
 

@@ -297,6 +297,7 @@ class Timers:
         if torch.distributed.is_initialized():
             rank = torch.distributed.get_rank()
             world_size = torch.distributed.get_world_size()
+            string = f"[RANK {rank}] " + string
             for i in range(world_size):
                 if rank == i:
                     print(string, flush=True)

@@ -211,9 +211,15 @@ def validate_args(args, defaults={}):
         assert args.tokens_per_global_batch is not None, \
             'dynamic batch size requires tokens-per-global-batch to be set'
 
+    if args.dynamic_batch_level == 'microbatch':
+        assert args.dynamic_batch_profile_path is not None, \
+            'dynamic microbatch size requires dynamic-batch-profile-path to be set'
+
     if args.assume_perfect_batching:
         assert args.dynamic_batchsize, \
             'assume-perfect-batching only works with dynamic batch size'
+        assert args.dynamic_batch_level == 'batch', \
+            'assume-perfect-batching only works with batch level dynamic batch'
         assert args.perfect_batching_seq_len is not None, \
             'assume-perfect-batching requires perfect-batching-seq-len to be set'
 
@@ -620,6 +626,10 @@ def _add_training_args(parser):
     group.add_argument('--dynamic-batch-level', type=str, default='batch',
                        choices=['batch', 'microbatch'],
                        help='Dynamic batch size level (batch or microbatch)')
+    group.add_argument('--dynamic-batch-profile-path', type=str,
+                       help='Path to dynamic batch size profile (required if dynamic batch level is microbatch')
+    group.add_argument('--dynamic-batch-min-efficiency', type=float, default=0.8,
+                       help='Minimum computation efficiency of microbatches. Used to determine the dynamic micro batch size.')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--assume-perfect-batching', action="store_true",

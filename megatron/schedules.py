@@ -27,6 +27,7 @@ from megatron.utils import unwrap_model
 from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.model import Float16Module
 from megatron.model import ModelType
+from megatron.data.data_utils import DynamicBatchingLevel
 
 
 def get_forward_backward_func():
@@ -693,7 +694,7 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
     #         time.sleep(0.5)
     #     torch.distributed.barrier()
 
-    if args.dynamic_batch_level == "batch":
+    if args.dynamic_batch_level == DynamicBatchingLevel.BATCH:
         # sanity check
         assert send_tensor_shapes_per_mb and all(send_tensor_shapes_per_mb[0] == elem for elem in send_tensor_shapes_per_mb)
         assert recv_tensor_shapes_per_mb and all(recv_tensor_shapes_per_mb[0] == elem for elem in recv_tensor_shapes_per_mb)
