@@ -344,7 +344,8 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         for sample in batch:
             if sample is None:
                 assert len(current_sequence) > 0
-                samples.append(current_sequence)
+                samples.append(current_sequence.copy())
+                current_sequence = []
             else:
                 current_sequence.append(sample)
         if len(current_sequence) > 0:
