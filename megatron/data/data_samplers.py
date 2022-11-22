@@ -462,6 +462,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 sample_target_seqlens = list(sample_target_seqlens)
                 indices = self._stage_time_model.generate_microbatches(
                     sample_input_seqlens,
+                    decoder_sample_sequence_lengths=sample_target_seqlens,
                     min_compute_efficiency=self._target_compute_efficiency,
                 )
                 (
