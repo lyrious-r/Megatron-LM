@@ -20,7 +20,7 @@ dataopt = DataAssignmentOptimizer(args.profile_path, 4, 3, 36000, 1024, 32, 1638
 input_seqlens = [int(x) for x in args.input_seqlens.split(",")]
 target_seqlens = [int(x) for x in args.target_seqlens.split(",")]
 
-indices = dataopt.generate_microbatches(
+_, indices = dataopt.generate_microbatches(
     input_seqlens,
     decoder_sample_sequence_lengths=target_seqlens,
     bottleneck_tsp=False,
