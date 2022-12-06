@@ -15,9 +15,11 @@
 
 """Dataloaders."""
 
-
+import sys
+import os
 import random
 import bisect
+from pathlib import Path
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -31,6 +33,7 @@ from megatron.data.data_utils import DynamicBatchingLevel
 from plopt.memory_utils import InvTransformerMemoryModel
 from plopt.stage_cost_model import StageCostModel
 
+MB_WORKER_PATH = (Path(__file__).parent / "gen_microbatch_worker.py").resolve()
 
 def build_pretraining_data_loader(dataset, consumed_samples):
     """Buld dataloader given an input dataset."""
@@ -532,10 +535,95 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                     current_batch_size * current_batch_input_padded_seq_len
                 )
 
+        def _append_batch_async_launch(start_idx, curr_idx):
+            if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+                import subprocess
+                import tempfile
+                nonlocal adjusted_total_samples
+                adjusted_total_samples += curr_idx - start_idx
+                # if dynamic batch level is microbatch, each microbatch is
+                # a list of list, outer: sequences, inner: samples packed
+                # into that sequence
+                sample_input_seqlens, sample_target_seqlens = zip(
+                    *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
+                )
+                sample_input_seqlens = list(sample_input_seqlens)
+                sample_target_seqlens = list(sample_target_seqlens)
+                # launch subprocess
+                tmp_file = tempfile.NamedTemporaryFile(prefix="gen_mb", delete=False)
+                tmp_file_name = tmp_file.name
+                tmp_file.close()
+                umask = os.umask(0o666)
+                os.umask(umask)
+                os.chmod(tmp_file_name, 0o666 & ~umask)
+                input_seqlens_str = ",".join([str(x) for x in sample_input_seqlens])
+                target_seqlens_str = ",".join([str(x) for x in sample_target_seqlens])
+                opt_args = ["--min-compute-eff", str(self._target_compute_efficiency)]
+                p = subprocess.Popen([sys.executable, MB_WORKER_PATH, args.dynamic_batch_profile_path, input_seqlens_str, target_seqlens_str, tmp_file_name] + opt_args)
+                return p, tmp_file_name, start_idx, curr_idx
+            else:
+                # no need to run async for batch level dynamic batching
+                _append_batch(start_idx, curr_idx)
+                return None, None, None, None
+
+        def _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx):
+            import json
+            nonlocal n_global_batches
+            nonlocal avg_samples_per_microbatch
+            if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+                p.wait()
+                with open(tmp_file_name, "r") as f:
+                    indices = json.load(f)
+                os.remove(tmp_file_name)
+                sample_input_seqlens, sample_target_seqlens = zip(
+                    *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
+                )
+                sample_input_seqlens = list(sample_input_seqlens)
+                sample_target_seqlens = list(sample_target_seqlens)
+                (
+                    padded_input_seqlens,
+                    padded_target_seqlens,
+                ) = _calc_batched_seqlen_for_mb_level_dbs(
+                    sample_input_seqlens, sample_target_seqlens, indices
+                )
+                microbatches = []
+                for i, mb_indices in enumerate(indices):
+                    mb = []
+                    num_samples = 0
+                    for samples in mb_indices:
+                        sequence = []
+                        for sample_idx, s in enumerate(samples):
+                            per_sample_enc_dec_seq_lengths[start_idx + s] = (
+                                padded_input_seqlens[i],
+                                padded_target_seqlens[i],
+                                sample_idx != 0
+                            )
+                            sequence.append(start_idx + s)
+                            num_samples += 1
+                        mb.append(sequence)
+                    microbatches.append(mb)
+                    avg_samples_per_microbatch.append(num_samples)
+                num_micro_batches_per_global_batch.append(len(microbatches))
+                if args.benchmark_microbatch_execution_time:
+                    # we want to measure the time it takes to execute a single microbatch
+                    microbatches = microbatches[:1]
+                    num_micro_batches_per_global_batch[-1] = 1
+                self._batches.append(microbatches)
+                n_global_batches += 1
+            else:
+                # no need to run async for batch level dynamic batching
+                pass
+
+        async_processes = []
         avg_global_batch_tokens = 0
         avg_input_seq_len = 0
         current_batch_tokens = 0
-        for idx in range(self.total_samples):
+        if mpu.get_pipeline_model_parallel_rank() == 0:
+            from tqdm import tqdm
+            index_iterator = tqdm(range(self.total_samples))
+        else:
+            index_iterator = range(self.total_samples)
+        for idx in index_iterator:
             input_seq_len, target_seq_len = _get_seq_len(idx)
             avg_input_seq_len += input_seq_len
             if args.assume_perfect_batching:
@@ -565,7 +653,12 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 and tokens_if_added >= self._tokens_per_global_batch
             ):
                 # create a new batch
-                _append_batch(current_batch_start_idx, idx)
+                process_info = _append_batch_async_launch(current_batch_start_idx, idx)
+                async_processes.append(process_info)
+                if len(async_processes) == args.preprocess_workers:
+                    p, tmp_file_name, start_idx, curr_idx = async_processes.pop(0)
+                    _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx)
+                # _append_batch(current_batch_start_idx, idx)
                 avg_global_batch_tokens += current_batch_tokens
                 current_batch_start_idx = idx
                 current_batch_size = 0
@@ -588,6 +681,9 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 current_batch_target_padded_seq_len = max(
                     current_batch_target_padded_seq_len, target_seq_len
                 )
+        # wait for remaining async processes
+        for p, tmp_file_name, start_idx, curr_idx in async_processes:
+            _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx)
         # create the last batch
         if (
             not args.assume_perfect_batching

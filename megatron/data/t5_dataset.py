@@ -420,8 +420,8 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             print_rank_0("=" * 80)
             print_rank_0("Sample sequence lengths:")
             input_padded_seqlen, target_padded_seqlen = (
-                sequence[0]["enc_seqlen"],
-                sequence[0]["dec_seqlen"],
+                samples[0][0]["enc_seqlen"],
+                samples[0][0]["dec_seqlen"],
             )
             total_input_tokens = 0
             total_target_tokens = 0

@@ -630,6 +630,8 @@ def _add_training_args(parser):
                        help='Path to dynamic batch size profile (required if dynamic batch level is microbatch')
     group.add_argument('--dynamic-batch-min-efficiency', type=float, default=0.8,
                        help='Minimum computation efficiency of microbatches. Used to determine the dynamic micro batch size.')
+    group.add_argument('--preprocess-workers', type=int, default=128,
+                       help='Number of workers to use for calculating microbatch assignment.')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--assume-perfect-batching', action="store_true",
