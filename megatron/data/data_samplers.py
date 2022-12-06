@@ -30,8 +30,7 @@ from megatron.utils import print_rank_0
 from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
 from megatron.data.data_utils import DynamicBatchingLevel
 
-from plopt.memory_utils import InvTransformerMemoryModel
-from plopt.stage_cost_model import StageCostModel
+from plopt.data_opt.optimizer import DataAssignmentOptimizer
 
 MB_WORKER_PATH = (Path(__file__).parent / "gen_microbatch_worker.py").resolve()
 
@@ -331,7 +330,8 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
                 args = get_args()
                 self._target_compute_efficiency = args.dynamic_batch_min_efficiency
-                self._stage_time_model = StageCostModel(args.dynamic_batch_profile_path)
+                # hard code model spec for now
+                self._stage_time_model = DataAssignmentOptimizer(args.dynamic_batch_profile_path, 4, 3, 36000, 1024, 32, 16384, 128)
         self._shape_consumed_samples = consumed_samples
         self._is_supervised_dataset = isinstance(dataset, T5SupervisedDataset)
         if dynamic_batchsize:
@@ -466,6 +466,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 indices = self._stage_time_model.generate_microbatches(
                     sample_input_seqlens,
                     decoder_sample_sequence_lengths=sample_target_seqlens,
+                    bottleneck_tsp=False,
                     min_compute_efficiency=self._target_compute_efficiency,
                 )
                 (
