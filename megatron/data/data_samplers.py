@@ -19,6 +19,7 @@ import sys
 import os
 import random
 import bisect
+import pickle
 from pathlib import Path
 import torch
 import numpy as np
@@ -620,80 +621,101 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         avg_input_seq_len = 0
         current_batch_tokens = 0
         if mpu.get_pipeline_model_parallel_rank() == 0:
+            # only calculate batches on the first rank
+            print_rank_0("Calculating microbatch assignment using {} workers...".format(args.preprocess_workers))
             from tqdm import tqdm
             index_iterator = tqdm(range(self.total_samples))
-        else:
-            index_iterator = range(self.total_samples)
-        for idx in index_iterator:
-            input_seq_len, target_seq_len = _get_seq_len(idx)
-            avg_input_seq_len += input_seq_len
-            if args.assume_perfect_batching:
-                current_batch_tokens = (
-                    current_batch_size * current_batch_input_padded_seq_len
-                )
-            # create a new batch if the current batch contains a multiple
-            # of data_parallel_size * micro_batch_size samples, and
-            # contains roughly _tokens_per_global_batch tokens
-            if args.assume_perfect_batching:
-                seq_len_if_added = max(
-                    current_batch_input_padded_seq_len, input_seq_len
-                )
-                tokens_if_added = (current_batch_size + 1) * seq_len_if_added
-            else:
-                tokens_if_added = current_batch_tokens + input_seq_len
-            if (
-                # current batch is not empty
-                current_batch_tokens
-                # current batch contains a multiple of data_parallel_size * micro_batch_size samples
-                and (
-                    (idx - current_batch_start_idx)
-                    % (self.data_parallel_size * self.micro_batch_size)
-                    == 0
-                )
+            for idx in index_iterator:
+                input_seq_len, target_seq_len = _get_seq_len(idx)
+                avg_input_seq_len += input_seq_len
+                if args.assume_perfect_batching:
+                    current_batch_tokens = (
+                        current_batch_size * current_batch_input_padded_seq_len
+                    )
+                # create a new batch if the current batch contains a multiple
+                # of data_parallel_size * micro_batch_size samples, and
                 # contains roughly _tokens_per_global_batch tokens
-                and tokens_if_added >= self._tokens_per_global_batch
-            ):
-                # create a new batch
-                process_info = _append_batch_async_launch(current_batch_start_idx, idx)
-                async_processes.append(process_info)
-                if len(async_processes) == args.preprocess_workers:
-                    p, tmp_file_name, start_idx, curr_idx = async_processes.pop(0)
-                    _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx)
-                # _append_batch(current_batch_start_idx, idx)
-                avg_global_batch_tokens += current_batch_tokens
-                current_batch_start_idx = idx
-                current_batch_size = 0
-                current_batch_tokens = 0
-                current_batch_input_padded_seq_len = 0
-                current_batch_target_padded_seq_len = 0
+                if args.assume_perfect_batching:
+                    seq_len_if_added = max(
+                        current_batch_input_padded_seq_len, input_seq_len
+                    )
+                    tokens_if_added = (current_batch_size + 1) * seq_len_if_added
+                else:
+                    tokens_if_added = current_batch_tokens + input_seq_len
                 if (
-                    args.assume_perfect_batching
-                    and consumed_tokens_include_padding >= total_tokens
+                    # current batch is not empty
+                    current_batch_tokens
+                    # current batch contains a multiple of data_parallel_size * micro_batch_size samples
+                    and (
+                        (idx - current_batch_start_idx)
+                        % (self.data_parallel_size * self.micro_batch_size)
+                        == 0
+                    )
+                    # contains roughly _tokens_per_global_batch tokens
+                    and tokens_if_added >= self._tokens_per_global_batch
                 ):
-                    self.total_samples = adjusted_total_samples
-                    break
-            # append to current batch
-            current_batch_tokens += input_seq_len
-            if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
-                current_batch_size += 1
-                current_batch_input_padded_seq_len = max(
-                    current_batch_input_padded_seq_len, input_seq_len
-                )
-                current_batch_target_padded_seq_len = max(
-                    current_batch_target_padded_seq_len, target_seq_len
-                )
-        # wait for remaining async processes
-        for p, tmp_file_name, start_idx, curr_idx in async_processes:
-            _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx)
-        # create the last batch
-        if (
-            not args.assume_perfect_batching
-            and (idx - current_batch_start_idx)
-            % (self.data_parallel_size * self.micro_batch_size)
-            == 0
-        ):
-            _append_batch(current_batch_start_idx, idx)
-            avg_global_batch_tokens += current_batch_tokens
+                    # create a new batch
+                    process_info = _append_batch_async_launch(current_batch_start_idx, idx)
+                    async_processes.append(process_info)
+                    if len(async_processes) == args.preprocess_workers:
+                        p, tmp_file_name, start_idx, curr_idx = async_processes.pop(0)
+                        _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx)
+                    # _append_batch(current_batch_start_idx, idx)
+                    avg_global_batch_tokens += current_batch_tokens
+                    current_batch_start_idx = idx
+                    current_batch_size = 0
+                    current_batch_tokens = 0
+                    current_batch_input_padded_seq_len = 0
+                    current_batch_target_padded_seq_len = 0
+                    if (
+                        args.assume_perfect_batching
+                        and consumed_tokens_include_padding >= total_tokens
+                    ):
+                        self.total_samples = adjusted_total_samples
+                        break
+                # append to current batch
+                current_batch_tokens += input_seq_len
+                if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
+                    current_batch_size += 1
+                    current_batch_input_padded_seq_len = max(
+                        current_batch_input_padded_seq_len, input_seq_len
+                    )
+                    current_batch_target_padded_seq_len = max(
+                        current_batch_target_padded_seq_len, target_seq_len
+                    )
+            # wait for remaining async processes
+            for p, tmp_file_name, start_idx, curr_idx in async_processes:
+                _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx)
+            # create the last batch
+            if (
+                not args.assume_perfect_batching
+                and (idx - current_batch_start_idx)
+                % (self.data_parallel_size * self.micro_batch_size)
+                == 0
+            ):
+                _append_batch(current_batch_start_idx, idx)
+                avg_global_batch_tokens += current_batch_tokens
+            # pickle the data
+            data_to_broadcast = (self._batches,
+                                adjusted_total_samples,
+                                n_global_batches,
+                                per_sample_enc_dec_seq_lengths)
+            # for testing, dump to current directory
+            with open("./tmp_batch_data.pickle", "wb") as f:
+                pickle.dump(data_to_broadcast, f)
+            # barrier
+            torch.distributed.barrier()
+            torch.distributed.barrier()
+            # delete the file
+            os.remove("./tmp_batch_data.pickle")
+        else:
+            torch.distributed.barrier()
+            with open("./tmp_batch_data.pickle", "rb") as f:
+                (self._batches,
+                adjusted_total_samples,
+                n_global_batches,
+                per_sample_enc_dec_seq_lengths) = pickle.load(f)
+            torch.distributed.barrier()
 
         self.last_batch_size = self.total_samples - adjusted_total_samples
         if args.benchmark_microbatch_execution_time:
@@ -717,32 +739,34 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 avg_input_seq_len / adjusted_total_samples,
             )
         )
-        if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
-            n_samples_per_mb = sum(avg_samples_per_microbatch) / len(
-                avg_samples_per_microbatch
+        n_samples_per_mb = 0
+        if mpu.get_pipeline_model_parallel_rank() == 0:
+            if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
+                n_samples_per_mb = sum(avg_samples_per_microbatch) / len(
+                    avg_samples_per_microbatch
+                )
+            else:
+                n_samples_per_mb = self.micro_batch_size
+            print_rank_0(
+                ">> {} total global batches, avg. {:.2f} microbatches per global batch, {} samples per microbatch.".format(
+                    n_global_batches,
+                    sum(num_micro_batches_per_global_batch)
+                    / len(num_micro_batches_per_global_batch),
+                    n_samples_per_mb,
+                )
             )
-        else:
-            n_samples_per_mb = self.micro_batch_size
-        print_rank_0(
-            ">> {} total global batches, avg. {:.2f} microbatches per global batch, {} samples per microbatch.".format(
-                n_global_batches,
-                sum(num_micro_batches_per_global_batch)
-                / len(num_micro_batches_per_global_batch),
-                n_samples_per_mb,
-            )
-        )
-        if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
-            for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
-                n_batches = 0
-                for x in padded_input_sequence_lengths:
-                    if x >= print_seq_len:
-                        n_batches += 1
-                if n_batches > 0:
-                    print_rank_0(
-                        ">> {} batches have sequence length >= {}.".format(
-                            n_batches, print_seq_len
+            if self._dynamic_batch_level == DynamicBatchingLevel.BATCH:
+                for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
+                    n_batches = 0
+                    for x in padded_input_sequence_lengths:
+                        if x >= print_seq_len:
+                            n_batches += 1
+                    if n_batches > 0:
+                        print_rank_0(
+                            ">> {} batches have sequence length >= {}.".format(
+                                n_batches, print_seq_len
+                            )
                         )
-                    )
         if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
             # sanity check on per_sample_enc_dec_seq_lengths
             for idx in range(adjusted_total_samples):
