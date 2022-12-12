@@ -715,18 +715,26 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
 
     current_fw_mb = 0
     current_bw_mb = 0
+    def _annotate_microbatch(stage, is_forward=True):
+        if is_forward:
+            return torch.cuda.nvtx.range("Forward Microbatch {} {}".format(current_fw_mb, stage))
+        else:
+            return torch.cuda.nvtx.range("Backward Microbatch {} {}".format(current_bw_mb, stage))
     # Run warmup forward passes.
     for i in range(num_warmup_microbatches):
         send_tensor_shapes = send_tensor_shapes_per_mb[current_fw_mb]
         recv_tensor_shapes = recv_tensor_shapes_per_mb[current_fw_mb]
-        input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
-        # print("Rank: {}, recved FW tensor of shape {}".format(rank, get_shapes(input_tensor)), flush=True)
-        output_tensor = forward_step(forward_step_func, data_iterator, model,
-                                     input_tensor, forward_data_store,
-                                     collect_non_loss_data)
-        # print("Rank: {}, sending FW tensor of shape {}".format(rank, get_shapes(output_tensor)), flush=True)
-        send_forward(output_tensor, send_tensor_shapes, timers=timers)
-        current_fw_mb += 1
+        with _annotate_microbatch("recv"):
+            input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
+        with _annotate_microbatch("compute"):
+            # print("Rank: {}, recved FW tensor of shape {}".format(rank, get_shapes(input_tensor)), flush=True)
+            output_tensor = forward_step(forward_step_func, data_iterator, model,
+                                        input_tensor, forward_data_store,
+                                        collect_non_loss_data)
+        with _annotate_microbatch("send"):
+            # print("Rank: {}, sending FW tensor of shape {}".format(rank, get_shapes(output_tensor)), flush=True)
+            send_forward(output_tensor, send_tensor_shapes, timers=timers)
+            current_fw_mb += 1
 
         if not forward_only:
             input_tensors.append(input_tensor)
@@ -737,33 +745,37 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
     # If all microbatches are run in warmup / cooldown phase, then no need to
     # receive this tensor here.
     if num_microbatches_remaining > 0:
-        send_tensor_shapes = send_tensor_shapes_per_mb[current_fw_mb]
-        recv_tensor_shapes = recv_tensor_shapes_per_mb[current_fw_mb]
-        input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
-        # print("Rank: {}, recved FW tensor of shape {}".format(rank, get_shapes(input_tensor)), flush=True)
+        with _annotate_microbatch("recv"):
+            send_tensor_shapes = send_tensor_shapes_per_mb[current_fw_mb]
+            recv_tensor_shapes = recv_tensor_shapes_per_mb[current_fw_mb]
+            input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
+            # print("Rank: {}, recved FW tensor of shape {}".format(rank, get_shapes(input_tensor)), flush=True)
 
     # Run 1F1B in steady state.
     for i in range(num_microbatches_remaining):
         last_iteration = (i == (num_microbatches_remaining - 1))
-
-        output_tensor = forward_step(forward_step_func, data_iterator, model,
-                                     input_tensor, forward_data_store,
-                                     collect_non_loss_data)
+        with _annotate_microbatch("compute"):
+            output_tensor = forward_step(forward_step_func, data_iterator, model,
+                                        input_tensor, forward_data_store,
+                                        collect_non_loss_data)
         if forward_only:
-            send_forward(output_tensor, send_tensor_shapes, timers=timers)
-            current_fw_mb += 1
+            with _annotate_microbatch("send"):
+                send_forward(output_tensor, send_tensor_shapes, timers=timers)
+                current_fw_mb += 1
             if not last_iteration:
-                send_tensor_shapes = send_tensor_shapes_per_mb[current_fw_mb]
-                recv_tensor_shapes = recv_tensor_shapes_per_mb[current_fw_mb]
-                input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
+                with _annotate_microbatch("recv"):
+                    send_tensor_shapes = send_tensor_shapes_per_mb[current_fw_mb]
+                    recv_tensor_shapes = recv_tensor_shapes_per_mb[current_fw_mb]
+                    input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
 
         else:
             recv_bw_tensor_shapes = send_tensor_shapes_per_mb[current_bw_mb]
-            output_tensor_grad = \
-                send_forward_recv_backward(output_tensor,
-                                           send_tensor_shapes,
-                                           recv_bw_tensor_shapes,
-                                           timers=timers)
+            with _annotate_microbatch("send_fw_recv_bw"):
+                output_tensor_grad = \
+                    send_forward_recv_backward(output_tensor,
+                                            send_tensor_shapes,
+                                            recv_bw_tensor_shapes,
+                                            timers=timers)
             # print("Rank: {}, sent FW tensor of shape {}, recved BW tensor of shape {}".format(rank, get_shapes(output_tensor), get_shapes(output_tensor_grad)), flush=True)
             current_fw_mb += 1
             # Add input_tensor and output_tensor to end of list.
@@ -775,23 +787,25 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             # the backward pass.
             input_tensor = input_tensors.pop(0)
             output_tensor = output_tensors.pop(0)
-
-            input_tensor_grad = \
-                backward_step(optimizer, input_tensor, output_tensor,
-                              output_tensor_grad)
+            with _annotate_microbatch("compute", is_forward=False):
+                input_tensor_grad = \
+                    backward_step(optimizer, input_tensor, output_tensor,
+                                output_tensor_grad)
 
             send_bw_tensor_shapes = recv_tensor_shapes_per_mb[current_bw_mb]
             if last_iteration:
                 input_tensor = None
-                send_backward(input_tensor_grad, send_bw_tensor_shapes, timers=timers)
-                # print("Rank: {}, sent BW tensor of shape {}".format(rank, get_shapes(input_tensor_grad)), flush=True)
+                with _annotate_microbatch("send", is_forward=False):
+                    send_backward(input_tensor_grad, send_bw_tensor_shapes, timers=timers)
+                    # print("Rank: {}, sent BW tensor of shape {}".format(rank, get_shapes(input_tensor_grad)), flush=True)
             else:
                 send_tensor_shapes = send_tensor_shapes_per_mb[current_fw_mb]
                 recv_tensor_shapes = recv_tensor_shapes_per_mb[current_fw_mb]
-                input_tensor = \
-                    send_backward_recv_forward(
-                        input_tensor_grad, send_bw_tensor_shapes, recv_tensor_shapes, timers=timers)
-                # print("Rank: {}, sent BW tensor of shape {}, recved FW tensor of shape {}".format(rank, get_shapes(input_tensor_grad), get_shapes(input_tensor)), flush=True)
+                with _annotate_microbatch("send_bw_recv_fw", is_forward=False):
+                    input_tensor = \
+                        send_backward_recv_forward(
+                            input_tensor_grad, send_bw_tensor_shapes, recv_tensor_shapes, timers=timers)
+                    # print("Rank: {}, sent BW tensor of shape {}, recved FW tensor of shape {}".format(rank, get_shapes(input_tensor_grad), get_shapes(input_tensor)), flush=True)
             current_bw_mb += 1
 
     # Run cooldown backward passes.
@@ -801,13 +815,15 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             output_tensor = output_tensors.pop(0)
             recv_bw_tensor_shapes = send_tensor_shapes_per_mb[current_bw_mb]
             send_bw_tensor_shapes = recv_tensor_shapes_per_mb[current_bw_mb]
-            output_tensor_grad = recv_backward(recv_bw_tensor_shapes, timers=timers)
+            with _annotate_microbatch("recv", is_forward=False):
+                output_tensor_grad = recv_backward(recv_bw_tensor_shapes, timers=timers)
 
-            input_tensor_grad = \
-                backward_step(optimizer, input_tensor, output_tensor,
-                              output_tensor_grad)
-
-            send_backward(input_tensor_grad, send_bw_tensor_shapes, timers=timers)
+            with _annotate_microbatch("compute", is_forward=False):
+                input_tensor_grad = \
+                    backward_step(optimizer, input_tensor, output_tensor,
+                                output_tensor_grad)
+            with _annotate_microbatch("send", is_forward=False):
+                send_backward(input_tensor_grad, send_bw_tensor_shapes, timers=timers)
             current_bw_mb += 1
 
     # if mpu.get_pipeline_model_parallel_rank() == 0:

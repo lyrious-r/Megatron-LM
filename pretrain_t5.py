@@ -126,8 +126,9 @@ def forward_step(data_iterator, model):
 
     # Get the batch.
     timers('batch-generator').start()
-    tokens_enc, tokens_dec, loss_mask, lm_labels, enc_mask, dec_mask, enc_dec_mask \
-        = get_batch(data_iterator)
+    with torch.cuda.nvtx.range("batch_generator"):
+        tokens_enc, tokens_dec, loss_mask, lm_labels, enc_mask, dec_mask, enc_dec_mask \
+            = get_batch(data_iterator)
     timers('batch-generator').stop()
 
     # Forward model lm_labels
