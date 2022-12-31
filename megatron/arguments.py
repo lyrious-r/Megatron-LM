@@ -156,6 +156,11 @@ def validate_args(args, defaults={}):
     else:
         args.virtual_pipeline_model_parallel_size = None
 
+    if args.uniform_microbatching:
+        assert args.uniform_microbatching_microbatch_size is not None, \
+            'uniform_microbatching_microbatch_size must be specified when ' \
+            'uniform_microbatching is set to True'
+
     # Parameters dtype.
     args.params_dtype = torch.float
     if args.fp16:
@@ -640,6 +645,10 @@ def _add_training_args(parser):
                        help='The sequence length to use when assuming perfect batching.'
                             'Different from the actual sequence length used for training,'
                             'this will not affect the total number of tokens in a epoch.')
+    group.add_argument('--uniform-microbatching', action='store_true',
+                       help='Make sure all microbatches have the same size in a minibatch.')
+    group.add_argument('--uniform-microbatching-microbatch-size', type=int,
+                        help='The microbatch size to use when uniform microbatching is enabled.')
     group.add_argument('--memory-model', type=str, default='fixed',
                        choices=['fixed', 'plopt', 'product'],
                        help='The memory model used to determine the microbatch size')
@@ -647,6 +656,8 @@ def _add_training_args(parser):
                        help="Candidate sequence lengths for dynamic batch size")
     group.add_argument('--per-iter-time-log-path', type=str, default=None,
                         help='Path to log per iteration time')
+    group.add_argument('--interleaved', action="store_true",
+                        help="Interleave layer placement.")
     group.add_argument('--max-truncation-factor', type=float, default=0.05,
                        help="When grouping samples by sequence length, samples with seq length "
                           "within max_truncation_factor of the previous bucket may be truncated "

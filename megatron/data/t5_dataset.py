@@ -48,16 +48,36 @@ def run_pack_samples(
     curr_input_sequence = []
     curr_target_sequence = []
     avg_samples_per_sequence = 0
+    total_enc_untruncated_tokens = 0
+    total_dec_untruncated_tokens = 0
     total_enc_tokens = 0
     total_dec_tokens = 0
+    total_enc_truncated_tokens = 0
+    total_dec_truncated_tokens = 0
+    num_truncated_samples = 0
+    total_enc_tokens_for_samples_truncated = 0
+    total_dec_tokens_for_samples_truncated = 0
     for idx in range(len(input_samples_mapping)):
+        truncated = False
         input_sample = input_samples_mapping[idx]
+        total_enc_untruncated_tokens += input_sample[2]
+        if input_sample[2] > max_seq_len_input:
+            truncated = True
+            total_enc_truncated_tokens += input_sample[2] - max_seq_len_input
+            total_enc_tokens_for_samples_truncated += input_sample[2]
         input_seq_len = min(input_sample[2], max_seq_len_input)
         total_enc_tokens += input_seq_len
         if target_samples_mapping is not None:
             target_sample = target_samples_mapping[idx]
+            total_dec_untruncated_tokens += target_sample[2]
+            if target_sample[2] > max_seq_len_target:
+                truncated = True
+                total_dec_truncated_tokens += target_sample[2] - max_seq_len_target
+                total_dec_tokens_for_samples_truncated += target_sample[2]
             target_seq_len = min(target_sample[2], max_seq_len_target)
             total_dec_tokens += target_seq_len
+        if truncated:
+            num_truncated_samples += 1
         if curr_input_seq_len + input_seq_len > max_seq_len_input or (
             target_samples_mapping is not None
             and curr_target_seq_len + target_seq_len > max_seq_len_target
@@ -88,6 +108,15 @@ def run_pack_samples(
             avg_samples_per_sequence / len(input_samples),
             total_enc_tokens / (len(input_samples) * max_seq_len_input),
             total_dec_tokens / (len(target_samples) * max_seq_len_target),
+        )
+    )
+    print_rank_0(
+        ">>> Truncated {}/{} samples: enc truncated token ratio: {}, dec truncated token ratio: {}, enc ratio among truncated: {}, dec ratio among truncated: {}".format(
+            num_truncated_samples, len(input_samples_mapping), 
+            total_enc_truncated_tokens / (total_enc_untruncated_tokens + 1e-6), 
+            total_dec_truncated_tokens / (total_dec_untruncated_tokens + 1e-6), 
+            total_enc_truncated_tokens / (total_enc_tokens_for_samples_truncated + 1e-6), 
+            total_dec_truncated_tokens / (total_dec_tokens_for_samples_truncated + 1e-6),
         )
     )
     return input_samples, target_samples

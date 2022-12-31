@@ -425,7 +425,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             return input_seq_len, target_seq_len
 
         def _calc_batched_seqlen_for_mb_level_dbs(
-            sample_input_seqlens, sample_target_seqlens, indices
+            sample_input_seqlens, sample_target_seqlens, indices, uniform_batching=False
         ):
             padded_input_seqlens = []
             padded_target_seqlens = []
@@ -443,8 +443,15 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 max_target_seqlen = (max_target_seqlen + 7) // 8 * 8
                 padded_input_seqlens.append(max_input_seqlen)
                 padded_target_seqlens.append(max_target_seqlen)
+            if uniform_batching:
+                # pad all mb to max length
+                max_input_seqlen = max(padded_input_seqlens)
+                max_target_seqlen = max(padded_target_seqlens)
+                padded_input_seqlens = [max_input_seqlen] * len(padded_input_seqlens)
+                padded_target_seqlens = [max_target_seqlen] * len(padded_target_seqlens)
             return padded_input_seqlens, padded_target_seqlens
 
+        batch_stats_json = []
         def _append_batch(start_idx, curr_idx):
             nonlocal adjusted_total_samples
             nonlocal n_global_batches
@@ -454,6 +461,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             nonlocal consumed_tokens_include_padding
             nonlocal per_sample_enc_dec_seq_lengths
             nonlocal avg_samples_per_microbatch
+            nonlocal batch_stats_json
             adjusted_total_samples += curr_idx - start_idx
             if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
                 # if dynamic batch level is microbatch, each microbatch is
@@ -462,21 +470,30 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 sample_input_seqlens, sample_target_seqlens = zip(
                     *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
                 )
-                sample_input_seqlens = list(sample_input_seqlens)
-                sample_target_seqlens = list(sample_target_seqlens)
+                if args.uniform_microbatching:
+                    partition_method = "uniform"
+                    mb_size = args.uniform_microbatching_microbatch_size
+                else:
+                    partition_method = "dp"
+                    # unused
+                    mb_size = 1
                 _, indices = self._stage_time_model.generate_microbatches(
                     sample_input_seqlens,
                     decoder_sample_sequence_lengths=sample_target_seqlens,
                     bottleneck_tsp=False,
+                    interleaved=args.interleaved,
                     min_compute_efficiency=self._target_compute_efficiency,
+                    partition_method=partition_method,
+                    uniform_partition_batch_size=mb_size,
                 )
                 (
                     padded_input_seqlens,
                     padded_target_seqlens,
                 ) = _calc_batched_seqlen_for_mb_level_dbs(
-                    sample_input_seqlens, sample_target_seqlens, indices
+                    sample_input_seqlens, sample_target_seqlens, indices, uniform_batching=args.uniform_microbatching
                 )
                 microbatches = []
+                microbatch_stats = []
                 for i, mb_indices in enumerate(indices):
                     mb = []
                     num_samples = 0
@@ -492,8 +509,10 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                             num_samples += 1
                         mb.append(sequence)
                     microbatches.append(mb)
+                    microbatch_stats.append((int(len(mb_indices)), int(padded_input_seqlens[i]), int(padded_target_seqlens[i])))
                     avg_samples_per_microbatch.append(num_samples)
                 num_micro_batches_per_global_batch.append(len(microbatches))
+                batch_stats_json.append(microbatch_stats)
             else:
                 # if not using dynamic microbatching, each microbatch is
                 # just a tuple specifying the start and end sample index.
@@ -502,6 +521,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 n_microbatches_per_rank = n_microbatches // self.data_parallel_size
                 num_micro_batches_per_global_batch.append(n_microbatches)
                 microbatches = []
+                microbatch_stats = []
                 for m in range(n_microbatches_per_rank):
                     mb_start_idx = (
                         start_idx
@@ -510,6 +530,14 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                     )
                     mb_end_idx = mb_start_idx + self.micro_batch_size
                     microbatches.append((mb_start_idx, mb_end_idx))
+                    current_batch_input_padded_seq_len = (
+                        (current_batch_input_padded_seq_len + 7) // 8 * 8
+                    )
+                    current_batch_target_padded_seq_len = (
+                        (current_batch_target_padded_seq_len + 7) // 8 * 8
+                    )
+                    microbatch_stats.append((int(self.micro_batch_size), int(current_batch_input_padded_seq_len), int(current_batch_target_padded_seq_len)))
+                batch_stats_json.append(microbatch_stats)
             if args.benchmark_microbatch_execution_time:
                 # we want to measure the time it takes to execute a single microbatch
                 microbatches = microbatches[:1]
@@ -549,8 +577,6 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 sample_input_seqlens, sample_target_seqlens = zip(
                     *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
                 )
-                sample_input_seqlens = list(sample_input_seqlens)
-                sample_target_seqlens = list(sample_target_seqlens)
                 # launch subprocess
                 tmp_file = tempfile.NamedTemporaryFile(prefix="gen_mb", delete=False)
                 tmp_file_name = tmp_file.name
@@ -561,6 +587,10 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 input_seqlens_str = ",".join([str(x) for x in sample_input_seqlens])
                 target_seqlens_str = ",".join([str(x) for x in sample_target_seqlens])
                 opt_args = ["--min-compute-eff", str(self._target_compute_efficiency)]
+                if args.interleaved:
+                    opt_args += ["--interleaved"]
+                if args.uniform_microbatching:
+                    opt_args += ["--uniform-partition", "--uniform-partition-batch-size", str(args.uniform_microbatching_microbatch_size)]
                 p = subprocess.Popen([sys.executable, MB_WORKER_PATH, args.dynamic_batch_profile_path, input_seqlens_str, target_seqlens_str, tmp_file_name] + opt_args)
                 return p, tmp_file_name, start_idx, curr_idx
             else:
@@ -568,27 +598,34 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 _append_batch(start_idx, curr_idx)
                 return None, None, None, None
 
+        max_sequence_length_per_minibatch = []
         def _append_batch_async_finish(p, tmp_file_name, start_idx, curr_idx):
             import json
             nonlocal n_global_batches
             nonlocal avg_samples_per_microbatch
+            nonlocal batch_stats_json
             if self._dynamic_batch_level == DynamicBatchingLevel.MICROBATCH:
                 p.wait()
+                if p.returncode != 0:
+                    sample_input_seqlens, sample_target_seqlens = zip(
+                        *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
+                    )
+                    os.remove(tmp_file_name)
+                    raise RuntimeError("Failed to generate microbatches: input seqlens: {}, target seqlens: {}".format(sample_input_seqlens, sample_target_seqlens))
                 with open(tmp_file_name, "r") as f:
                     indices = json.load(f)
                 os.remove(tmp_file_name)
                 sample_input_seqlens, sample_target_seqlens = zip(
                     *[_get_seq_len(idx) for idx in range(start_idx, curr_idx)]
                 )
-                sample_input_seqlens = list(sample_input_seqlens)
-                sample_target_seqlens = list(sample_target_seqlens)
                 (
                     padded_input_seqlens,
                     padded_target_seqlens,
                 ) = _calc_batched_seqlen_for_mb_level_dbs(
-                    sample_input_seqlens, sample_target_seqlens, indices
+                    sample_input_seqlens, sample_target_seqlens, indices, uniform_batching=args.uniform_microbatching
                 )
                 microbatches = []
+                microbatch_stats = []
                 for i, mb_indices in enumerate(indices):
                     mb = []
                     num_samples = 0
@@ -604,8 +641,11 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                             num_samples += 1
                         mb.append(sequence)
                     microbatches.append(mb)
+                    microbatch_stats.append((int(len(mb_indices)), int(padded_input_seqlens[i]), int(padded_target_seqlens[i])))
                     avg_samples_per_microbatch.append(num_samples)
+                max_sequence_length_per_minibatch.append(max(padded_input_seqlens + padded_target_seqlens))
                 num_micro_batches_per_global_batch.append(len(microbatches))
+                batch_stats_json.append(microbatch_stats)
                 if args.benchmark_microbatch_execution_time:
                     # we want to measure the time it takes to execute a single microbatch
                     microbatches = microbatches[:1]
@@ -708,6 +748,25 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             torch.distributed.barrier()
             # delete the file
             os.remove("./tmp_batch_data.pickle")
+            # write mb stats to file
+            import json
+            if args.uniform_microbatching:
+                fn = f"./mb_stats_uniform_microbatching_mbs{args.uniform_microbatching_microbatch_size}.json"
+            else:
+                fn = "./mb_stats.json"
+            with open(fn, "w") as f:
+                json.dump(batch_stats_json, f)
+            for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
+                n_batches = 0
+                for x in max_sequence_length_per_minibatch:
+                    if x >= print_seq_len:
+                        n_batches += 1
+                if n_batches > 0:
+                    print_rank_0(
+                        ">> {} batches have sequence length >= {}.".format(
+                            n_batches, print_seq_len
+                        )
+                    )
         else:
             torch.distributed.barrier()
             with open("./tmp_batch_data.pickle", "rb") as f:
@@ -716,7 +775,6 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 n_global_batches,
                 per_sample_enc_dec_seq_lengths) = pickle.load(f)
             torch.distributed.barrier()
-
         self.last_batch_size = self.total_samples - adjusted_total_samples
         if args.benchmark_microbatch_execution_time:
             # only execute first benchmark_microbatch_iters iterations
