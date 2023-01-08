@@ -60,7 +60,9 @@ def get_language_model(num_tokentypes, add_pooler,
                        scaled_init_method=None, add_encoder=True,
                        add_decoder=False,
                        decoder_attn_mask_type=AttnMaskType.causal,
-                       pre_process=True, post_process=True):
+                       pre_process=True, post_process=True,
+                       enc_output_fw_hook=None,
+                       enc_output_gradient_hook=None):
     """Build language model and return along with the key to save."""
     args = get_args()
 
@@ -82,7 +84,9 @@ def get_language_model(num_tokentypes, add_pooler,
         decoder_attn_mask_type=decoder_attn_mask_type,
         add_pooler=add_pooler,
         pre_process=pre_process,
-        post_process=post_process
+        post_process=post_process,
+        enc_output_fw_hook=enc_output_fw_hook,
+        enc_output_gradient_hook=enc_output_gradient_hook
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -329,7 +333,9 @@ class TransformerLanguageModel(MegatronModule):
                  decoder_attn_mask_type=AttnMaskType.causal,
                  add_pooler=False,
                  pre_process=True,
-                 post_process=True):
+                 post_process=True,
+                 enc_output_fw_hook=None,
+                 enc_output_gradient_hook=None):
         super(TransformerLanguageModel, self).__init__()
         args = get_args()
 
@@ -344,6 +350,8 @@ class TransformerLanguageModel(MegatronModule):
         self.decoder_attn_mask_type = decoder_attn_mask_type
         self.add_pooler = add_pooler
         self.encoder_hidden_state = None
+        self.enc_output_fw_hook = enc_output_fw_hook
+        self.enc_output_gradient_hook = enc_output_gradient_hook
 
         # Embeddings.
         if self.pre_process:
@@ -443,6 +451,11 @@ class TransformerLanguageModel(MegatronModule):
                 encoder_output = self.encoder_hidden_state
         else:
             encoder_output = enc_hidden_states.to(encoder_input.dtype)
+
+        if self.enc_output_fw_hook is not None:
+            self.enc_output_fw_hook()
+        if self.enc_output_gradient_hook is not None:
+            encoder_output.register_hook(self.enc_output_gradient_hook)
 
         if self.post_process:
             if self.add_pooler:
