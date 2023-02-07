@@ -9,3 +9,6 @@ __pycache__
 megatron/fused_kernels/build/
 *.so
 *.pickle
+*.tar.gz
+*.nsys-rep
+*.csv
