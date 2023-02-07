@@ -18,7 +18,7 @@ parser.add_argument("--interleaved", action="store_true")
 args = parser.parse_args()
 
 # hardcode model spec for now
-dataopt = DataAssignmentOptimizer(args.profile_path, 4, 3, 36000, 1024, 32, 16384, 128)
+dataopt = DataAssignmentOptimizer(args.profile_path, 4, 3, 80000, 1024, 128, 65536, 128)
 
 input_seqlens = [int(x) for x in args.input_seqlens.split(",")]
 target_seqlens = [int(x) for x in args.target_seqlens.split(",")]
@@ -30,6 +30,7 @@ else:
 
 _, indices = dataopt.generate_microbatches(
     input_seqlens,
+    "none",
     decoder_sample_sequence_lengths=target_seqlens,
     partition_method=partition_method,
     bottleneck_tsp=False,

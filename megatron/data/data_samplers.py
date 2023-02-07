@@ -751,11 +751,14 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             # write mb stats to file
             import json
             if args.uniform_microbatching:
-                fn = f"./mb_stats_uniform_microbatching_mbs{args.uniform_microbatching_microbatch_size}.json"
+                fn = f"{args.mb_stats_dump_prefix}_unimb{args.uniform_microbatching_microbatch_size}.json"
             else:
-                fn = "./mb_stats.json"
+                fn = f"{args.mb_stats_dump_prefix}_dynmb.json"
             with open(fn, "w") as f:
                 json.dump(batch_stats_json, f)
+            if args.abort_after_batch_generation:
+                torch.distributed.barrier()
+                exit(0)
             for print_seq_len in [16, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096]:
                 n_batches = 0
                 for x in max_sequence_length_per_minibatch:
@@ -775,6 +778,9 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 n_global_batches,
                 per_sample_enc_dec_seq_lengths) = pickle.load(f)
             torch.distributed.barrier()
+            if args.abort_after_batch_generation:
+                torch.distributed.barrier()
+                exit(0)
         self.last_batch_size = self.total_samples - adjusted_total_samples
         if args.benchmark_microbatch_execution_time:
             # only execute first benchmark_microbatch_iters iterations
