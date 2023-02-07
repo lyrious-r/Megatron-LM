@@ -161,6 +161,9 @@ def pretrain(train_valid_test_dataset_provider,
     args.train_iters = n_iters_per_epoch
 
     iteration = 0
+    if args.profile_with_nsys:
+        print("Cuda profiler started.")
+        torch.cuda.cudart().cudaProfilerStart()
     if args.do_train and args.train_iters > 0:
         iteration = train(forward_step_func,
                           model, optimizer, opt_param_scheduler,
@@ -697,6 +700,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     total_loss_dict = {}
 
     # Iterations.
+    orig_iteration = args.iteration
     iteration = args.iteration
 
     timers('interval-time').start()
@@ -714,6 +718,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        opt_param_scheduler,
                        shape_iterator=train_shape_iterator)
         iteration += 1
+        if args.profile_with_nsys and iteration - orig_iteration >= 20:
+            torch.cuda.cudart().cudaProfilerStop()
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
