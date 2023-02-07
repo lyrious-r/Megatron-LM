@@ -1,3 +1,11 @@
 __pycache__
 .vscode
 .DS_Store
+*.txt
+*.sh
+*.idx
+*.bin
+*.npy
+megatron/fused_kernels/build/
+*.so
+*.pickle
