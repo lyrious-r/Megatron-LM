@@ -333,6 +333,18 @@ Theoretical memory savings vary depending on the combination of the model's para
 | bf16 param, fp32 grads | 18 | 6 + 12/d |
 | fp32 param, fp32 grads | 16 | 8 + 8/d |
 
+## FlashAttention
+
+Usage: `--use-flash-attn`. Support attention head dimensions at most 128.
+
+[FlashAttention](https://github.com/HazyResearch/flash-attention) is a fast and
+memory-efficient algorithm to compute exact attention. It speeds up model
+training and reduces memory requirement.
+
+To install FlashAttention:
+```sh
+pip install flash-attn
+```
 
 ## GPT-3 Example
 
@@ -458,6 +470,12 @@ curl 'http://localhost:5000/api' -X 'PUT' -H 'Content-Type: application/json; ch
 </pre>
 
 See [megatron/text_generation_server.py](megatron/text_generation_server.py) for more API options.
+
+### Detoxify GPT via Self-generation
+We include an example in `examples/detxoify_lm/` to detoxify language models by leveraging the generative power of language models.
+
+See [examples/detxoify_lm/README.md](examples/detxoify_lm/README.md) for step-by-step tutorials on how to perform domain-adaptive training and detoxify LM using self-generated corpus. 
+
 
 ## GPT Evaluation
 We include example scripts for GPT evaluation on WikiText perplexity evaluation and LAMBADA Cloze accuracy.

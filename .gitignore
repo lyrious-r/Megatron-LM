@@ -15,3 +15,6 @@ megatron/fused_kernels/build/
 /gen_*.py
 /get_*.py
 /test_*.py
+build
+.coverage_*
+*.egg-info
