@@ -12,3 +12,6 @@ megatron/fused_kernels/build/
 *.tar.gz
 *.nsys-rep
 *.csv
+/gen_*.py
+/get_*.py
+/test_*.py
