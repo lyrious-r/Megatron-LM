@@ -39,7 +39,6 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
         --vocab-extra-ids 100 \
        --num-workers 2 \
        --dataloader-type ordered \
-       --memory-model fixed \
        --preprocess-workers 512 \
        --tokens-per-global-batch 16384"""
 

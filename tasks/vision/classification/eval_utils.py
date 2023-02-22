@@ -55,7 +55,7 @@ def accuracy_func_provider():
     return metrics_func
 
 
-def calculate_correct_answers(model, dataloader, epoch, shape_iterator=None):
+def calculate_correct_answers(model, dataloader, epoch):
     """Calculate correct over total answers"""
 
     forward_backward_func = get_forward_backward_func()
@@ -95,7 +95,7 @@ def calculate_correct_answers(model, dataloader, epoch, shape_iterator=None):
         for _, batch in enumerate(dataloader):
 
             loss_dicts = forward_backward_func(correct_answers_forward_step, batch, model,
-                                               optimizer=None, timers=None, forward_only=True, shape_iterator=shape_iterator)
+                                               optimizer=None, timers=None, forward_only=True)
 
             for loss_dict in loss_dicts:
                 total += loss_dict['total']

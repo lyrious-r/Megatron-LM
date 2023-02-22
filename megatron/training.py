@@ -131,9 +131,7 @@ def pretrain(train_valid_test_dataset_provider,
         test_data_iterator = [data_iterators[2]
                               for data_iterators in all_data_iterators]
     else:
-        (train_data_iterator, train_shape_iterator), \
-        (valid_data_iterator, valid_shape_iterator), \
-        (test_data_iterator, test_shape_iterator), n_iters_per_epoch \
+        train_data_iterator, valid_data_iterator, test_data_iterator \
             = build_train_valid_test_data_iterators(
                 train_valid_test_dataset_provider)
     timers('train/valid/test-data-iterators-setup').stop()
@@ -146,9 +144,7 @@ def pretrain(train_valid_test_dataset_provider,
     print_rank_0('training ...')
 
     if args.train_epochs is not None:
-        print_rank_0('training for {} epochs, overriding train_iters to {}'.format(args.train_epochs, n_iters_per_epoch))
-
-    args.train_iters = n_iters_per_epoch
+        print_rank_0('training for {} epochs.'.format(args.train_epochs))
 
     iteration = 0
     if args.profile_with_nsys:
@@ -157,8 +153,7 @@ def pretrain(train_valid_test_dataset_provider,
     if args.do_train and args.train_iters > 0:
         iteration = train(forward_step_func,
                           model, optimizer, opt_param_scheduler,
-                          train_data_iterator, train_shape_iterator,
-                          valid_data_iterator, valid_shape_iterator,
+                          train_data_iterator, valid_data_iterator,
                           process_non_loss_data_func)
     print_datetime('after training is done')
 
@@ -167,7 +162,7 @@ def pretrain(train_valid_test_dataset_provider,
         evaluate_and_print_results(prefix, forward_step_func,
                                    valid_data_iterator, model,
                                    iteration, process_non_loss_data_func,
-                                   False, shape_iterator=valid_shape_iterator)
+                                   False)
 
     if args.save and iteration != 0:
         save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
@@ -409,7 +404,7 @@ def setup_model_and_optimizer(model_provider_func,
 
 
 def train_step(forward_step_func, data_iterator,
-               model, optimizer, opt_param_scheduler, shape_iterator=None):
+               model, optimizer, opt_param_scheduler):
     """Single training step."""
     args = get_args()
     timers = get_timers()
@@ -653,10 +648,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             # Report memory after optimizer state has been initialized.
             report_memory('(after {} iterations)'.format(iteration))
             report_memory_flag = False
-        if args.benchmark_microbatch_execution_time:
-            timers.log_all_ranks(timers_to_log, normalizer=args.log_interval)
-        else:
-            timers.log(timers_to_log, normalizer=args.log_interval)
+        timers.log(timers_to_log, normalizer=args.log_interval)
 
     return report_memory_flag
 
@@ -672,8 +664,7 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler):
 
 
 def train(forward_step_func, model, optimizer, opt_param_scheduler,
-          train_data_iterator, train_shape_iterator,
-          valid_data_iterator, valid_shape_iterator,
+          train_data_iterator, valid_data_iterator,
           process_non_loss_data_func):
     """Train the model function."""
     args = get_args()
@@ -705,8 +696,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        train_data_iterator,
                        model,
                        optimizer,
-                       opt_param_scheduler,
-                       shape_iterator=train_shape_iterator)
+                       opt_param_scheduler)
         iteration += 1
         if args.profile_with_nsys and iteration - orig_iteration >= 20:
             torch.cuda.cudart().cudaProfilerStop()
@@ -741,7 +731,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             evaluate_and_print_results(prefix, forward_step_func,
                                        valid_data_iterator, model,
                                        iteration, process_non_loss_data_func,
-                                       False, shape_iterator=valid_shape_iterator)
+                                       False)
 
         # Checkpointing
         saved_checkpoint = False
@@ -791,8 +781,7 @@ def evaluate(forward_step_func,
              data_iterator,
              model,
              process_non_loss_data_func,
-             verbose=False,
-             shape_iterator=None):
+             verbose=False):
     """Evaluation."""
     args = get_args()
 
@@ -816,7 +805,7 @@ def evaluate(forward_step_func,
             forward_backward_func = get_forward_backward_func()
             loss_dicts = forward_backward_func(
                 forward_step_func, data_iterator, model, optimizer=None,
-                timers=None, forward_only=True, shape_iterator=shape_iterator)
+                timers=None, forward_only=True)
 
             # Empty unused memory
             if args.empty_unused_memory_level >= 1:
@@ -850,14 +839,14 @@ def evaluate(forward_step_func,
 def evaluate_and_print_results(prefix, forward_step_func,
                                data_iterator, model,
                                iteration, process_non_loss_data_func,
-                               verbose=False, shape_iterator=None):
+                               verbose=False):
     """Helper function to evaluate and dump results on screen."""
     args = get_args()
     writer = get_tensorboard_writer()
 
     total_loss_dict, collected_non_loss_data = evaluate(
         forward_step_func, data_iterator, model,
-        process_non_loss_data_func, verbose, shape_iterator=shape_iterator)
+        process_non_loss_data_func, verbose)
     string = ' validation loss at {} | '.format(prefix)
     for key in total_loss_dict:
         string += '{} value: {:.6E} | '.format(key, total_loss_dict[key].item())
@@ -895,7 +884,7 @@ def build_train_valid_test_data_iterators(
     """XXX"""
     args = get_args()
 
-    (train_dataloader, valid_dataloader, test_dataloader, n_iters_per_epoch) = (None, None, None, None)
+    (train_dataloader, valid_dataloader, test_dataloader) = (None, None, None)
 
     print_rank_0('> building train, validation, and test datasets ...')
 
@@ -935,11 +924,11 @@ def build_train_valid_test_data_iterators(
             train_val_test_num_samples)
 
         # Build dataloders.
-        train_dataloader, train_shape_iterator, n_iters_per_epoch = build_pretraining_data_loader(
+        train_dataloader = build_pretraining_data_loader(
             train_ds, args.consumed_train_samples)
-        valid_dataloader, valid_shape_iterator, _ = build_pretraining_data_loader(
+        valid_dataloader = build_pretraining_data_loader(
             valid_ds, args.consumed_valid_samples)
-        test_dataloader, test_shape_iterator, _ = build_pretraining_data_loader(test_ds, 0)
+        test_dataloader = build_pretraining_data_loader(test_ds, 0)
         if isinstance(train_ds, (T5UnsupervisedDataset, T5SupervisedDataset)):
             input_padding_eff, target_padding_eff = train_ds.get_padding_efficiency()
             print_rank_0(' > training set padding efficiency:')
@@ -974,23 +963,11 @@ def build_train_valid_test_data_iterators(
     else:
         train_data_iterator = None
 
-    if train_shape_iterator is not None:
-        train_shape_iterator = iter(train_shape_iterator) if dl_type == 'single' \
-                              else iter(cyclic_iter(train_shape_iterator))
-    else:
-        train_shape_iterator = None
-
     if valid_dataloader is not None:
         valid_data_iterator = iter(valid_dataloader) if dl_type == 'single' \
                               else iter(cyclic_iter(valid_dataloader))
     else:
         valid_data_iterator = None
-
-    if valid_shape_iterator is not None:
-        valid_shape_iterator = iter(valid_shape_iterator) if dl_type == 'single' \
-                              else iter(cyclic_iter(valid_shape_iterator))
-    else:
-        valid_shape_iterator = None
 
     if test_dataloader is not None:
         test_data_iterator = iter(test_dataloader) if dl_type == 'single' \
@@ -998,10 +975,4 @@ def build_train_valid_test_data_iterators(
     else:
         test_data_iterator = None
 
-    if test_shape_iterator is not None:
-        test_shape_iterator = iter(test_shape_iterator) if dl_type == 'single' \
-                              else iter(cyclic_iter(test_shape_iterator))
-    else:
-        test_shape_iterator = None
-
-    return (train_data_iterator, train_shape_iterator), (valid_data_iterator, valid_shape_iterator), (test_data_iterator, test_shape_iterator), n_iters_per_epoch
+    return train_data_iterator, valid_data_iterator, test_data_iterator

@@ -310,7 +310,6 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             self.max_seq_length_dec - 2,  # account for added tokens
             self.seed,
             self.name,
-            False,
             sort_samples=sort_samples,
         )
 

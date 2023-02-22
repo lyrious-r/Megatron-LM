@@ -74,6 +74,7 @@ def get_batch(data_iterator):
     keys = ['text_enc', 'text_dec', 'labels', 'loss_mask',
             'enc_mask', 'dec_mask', 'enc_dec_mask']
     datatype = torch.int64
+
     # Broadcast data.
     if data_iterator is not None:
         data = next(data_iterator)

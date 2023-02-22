@@ -33,7 +33,6 @@ from megatron import (
 from megatron.core import mpu
 from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
-from megatron.data.data_utils import DynamicBatchingLevel
 
 DSET_TYPE_BERT = 'standard_bert'
 DSET_TYPE_ICT = 'ict'
@@ -572,7 +571,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                 kwargs["pack_samples"] = pack_samples
                 if dataset_type == DSET_TYPE_T5_SUPERVISED:
                     args = get_args()
-                    kwargs["pad_samples"] = not (args.dynamic_batchsize and args.dynamic_batch_level == DynamicBatchingLevel.MICROBATCH)
+                    kwargs["pad_samples"] = not args.dynamic_batchsize
             elif sort_samples or pack_samples:
                 raise ValueError("sort_samples and pack_samples are only supported for T5 dataset type")
 
@@ -787,9 +786,8 @@ def get_samples_mapping_supervised(
                         max_seq_len_dec,
                         seed,
                         name,
-                        binary_head,
                         sort_samples=False,
-                        pack_samples=False):
+):
     """Get a list that maps a sample index to a starting sentence index, end sentence index, and length"""
 
     if not num_epochs:

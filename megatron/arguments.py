@@ -144,11 +144,6 @@ def validate_args(args, defaults={}):
     else:
         args.virtual_pipeline_model_parallel_size = None
 
-    if args.uniform_microbatching:
-        assert args.uniform_microbatching_microbatch_size is not None, \
-            'uniform_microbatching_microbatch_size must be specified when ' \
-            'uniform_microbatching is set to True'
-
     # Parameters dtype.
     args.params_dtype = torch.float
     if args.fp16:
@@ -195,25 +190,6 @@ def validate_args(args, defaults={}):
     if args.dynamic_batchsize:
         assert args.tokens_per_global_batch is not None, \
             'dynamic batch size requires tokens-per-global-batch to be set'
-
-    if args.dynamic_batch_level == 'microbatch':
-        assert args.dynamic_batch_profile_path is not None, \
-            'dynamic microbatch size requires dynamic-batch-profile-path to be set'
-
-    if args.assume_perfect_batching:
-        assert args.dynamic_batchsize, \
-            'assume-perfect-batching only works with dynamic batch size'
-        assert args.dynamic_batch_level == 'batch', \
-            'assume-perfect-batching only works with batch level dynamic batch'
-        assert args.perfect_batching_seq_len is not None, \
-            'assume-perfect-batching requires perfect-batching-seq-len to be set'
-
-    if args.benchmark_microbatch_execution_time:
-        assert args.dynamic_batchsize, \
-            'benchmark-microbatch-execution-time only works with dynamic batch size'
-        assert args.perfect_batching_seq_len is not None, \
-            'benchmark-microbatch-execution-time requires perfect-batching-seq-len to be set'
-        args.log_interval = 1
 
     # Consumed tokens.
     args.consumed_train_samples = 0
@@ -701,54 +677,16 @@ def _add_training_args(parser):
                        help='Sort the dataset by sequence length')
     group.add_argument('--pack-dataset', action='store_true',
                         help='Pack multiple samples in to a single sequence.')
-    group.add_argument('--benchmark-microbatch-execution-time', action='store_true',
-                       help='Benchmark microbatch execution time.')
-    group.add_argument('--benchmark-microbatch-iters', type=int, default=50,
-                       help='Benchmark microbatch execution time.')
     group.add_argument('--dynamic-batchsize', action="store_true",
                        help='Use dynamic batch size for training')
-    group.add_argument('--dynamic-batch-level', type=str, default='batch',
-                       choices=['batch', 'microbatch'],
-                       help='Dynamic batch size level (batch or microbatch)')
-    group.add_argument('--dynamic-batch-profile-path', type=str,
-                       help='Path to dynamic batch size profile (required if dynamic batch level is microbatch')
-    group.add_argument('--dynamic-batch-min-efficiency', type=float, default=0.8,
-                       help='Minimum computation efficiency of microbatches. Used to determine the dynamic micro batch size.')
-    group.add_argument('--mb-stats-dump-prefix', type=str, default="./mb_stats",
-                       help='Prefix for dumping microbatch stats. Used for debugging.')
     group.add_argument('--profile-with-nsys', action="store_true",
                        help='Turn on cudaProfiler flags for nsys profiling')
-    group.add_argument('--abort-after-batch-generation', action="store_true",
-                       help='Abort after generating the batch profile. Used for debugging.')
     group.add_argument('--preprocess-workers', type=int, default=128,
                        help='Number of workers to use for calculating microbatch assignment.')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
-    group.add_argument('--assume-perfect-batching', action="store_true",
-                       help='Assume perfect batching for dynamic batch size, only used to get theoretical throughput upper bound')
-    group.add_argument('--perfect-batching-seq-len', type=int,
-                       help='The sequence length to use when assuming perfect batching.'
-                            'Different from the actual sequence length used for training,'
-                            'this will not affect the total number of tokens in a epoch.')
-    group.add_argument('--uniform-microbatching', action='store_true',
-                       help='Make sure all microbatches have the same size in a minibatch.')
-    group.add_argument('--uniform-microbatching-microbatch-size', type=int,
-                        help='The microbatch size to use when uniform microbatching is enabled.')
-    group.add_argument('--memory-model', type=str, default='fixed',
-                       choices=['fixed', 'plopt', 'product'],
-                       help='The memory model used to determine the microbatch size')
-    group.add_argument('--seq-len-buckets', type=str, default=None,
-                       help="Candidate sequence lengths for dynamic batch size")
     group.add_argument('--per-iter-time-log-path', type=str, default=None,
                         help='Path to log per iteration time')
-    group.add_argument('--interleaved', action="store_true",
-                        help="Interleave layer placement.")
-    group.add_argument('--max-truncation-factor', type=float, default=0.05,
-                       help="When grouping samples by sequence length, samples with seq length "
-                          "within max_truncation_factor of the previous bucket may be truncated "
-                          "to the previous bucket's sequence length to avoid excessive padding.")
-    group.add_argument('--min-truncation-seq-len', type=int, default=512,
-                       help="Sequence lengths shorter than this value will not be truncated.")
     group.add_argument('--no-async-tensor-model-parallel-allreduce',
                        action='store_false',
                        help='Disable asynchronous execution of '
