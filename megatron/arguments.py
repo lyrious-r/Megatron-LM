@@ -356,7 +356,7 @@ def validate_args(args, defaults={}):
     # plopt args
     if args.use_plopt:
         required_plopt_args = ["plopt_cost_model", "plopt_device_to_node",
-                                "plopt_device_memory_limits",
+                                "plopt_device_memory_limit",
                                 "plopt_intra_node_bw", "plopt_inter_node_bw",
                                 "plopt_intra_node_lat", "plopt_inter_node_lat",
                                 "plopt_layer_to_device"]
@@ -378,16 +378,6 @@ def validate_args(args, defaults={}):
                 "plopt_device_to_node must have the same number of entries as "
                 "pipeline_model_parallel_size")
         try:
-            device_memory_limits = [int(args.plopt_device_memory_limits)] * \
-                                    len(args.plopt_device_to_node)
-        except ValueError:
-            device_memory_limits = [int(limit) for limit in
-                                    args.plopt_device_memory_limits.split(",")]
-        args.plopt_device_memory_limits = device_memory_limits
-        assert len(args.plopt_device_to_node) == len(device_memory_limits), \
-            "plopt_device_to_node and plopt_device_memory_limits must have " \
-            "the same number of entries"
-        try:
             args.plopt_layer_to_device = [int(layer) for layer in
                                         args.plopt_layer_to_device.split(",")]
         except ValueError:
@@ -396,7 +386,7 @@ def validate_args(args, defaults={}):
         assert len(args.plopt_layer_to_device) == 2 * args.num_layers, \
             "plopt_layer_to_device must have 2 * num_layers entries"
         if not args.plopt_prefetch_planner_num_workers:
-            local_world_size = os.environ.get("LOCAL_WORLD_SIZE", 8)
+            local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 8))
             args.plopt_prefetch_planner_num_workers = max(1, os.cpu_count() -
                 2 * args.plopt_prefetch_listener_num_workers * (local_world_size - 1))
 
@@ -728,8 +718,6 @@ def _add_training_args(parser):
                        help='Use dynamic batch size for training')
     group.add_argument('--profile-with-nsys', action="store_true",
                        help='Turn on cudaProfiler flags for nsys profiling')
-    group.add_argument('--preprocess-workers', type=int, default=128,
-                       help='Number of workers to use for calculating microbatch assignment.')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--per-iter-time-log-path', type=str, default=None,
@@ -1195,9 +1183,9 @@ def _add_plopt_args(parser):
     group.add_argument('--plopt-device-to-node', type=str,
                         help='Mapping between device ranks to nodes.'
                              'Format: <device_rank>:<node_rank>,...')
-    group.add_argument('--plopt-device-memory-limits', type=str,
+    group.add_argument('--plopt-device-memory-limit', type=int,
                         help='Memory limits for each device.'
-                             'A int or a list of ints, in MB.')
+                             'A int, in MB.')
     group.add_argument('--plopt-intra-node-bw', type=int,
                         help='Intra-node bandwidth in Gbps.')
     group.add_argument('--plopt-inter-node-bw', type=int,
@@ -1216,4 +1204,5 @@ def _add_plopt_args(parser):
     group.add_argument('--plopt-prefetch-listener-num-workers', type=int,
                         default=2, help='Number of listener workers to use. '
                                         'A small number should be enough.')
+    return parser
 

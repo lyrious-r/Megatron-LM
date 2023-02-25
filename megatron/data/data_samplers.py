@@ -51,7 +51,6 @@ def build_pretraining_data_loader(dataset, consumed_samples, is_training=False):
             data_parallel_size=mpu.get_data_parallel_world_size(),
             data_sharding=args.data_sharding,
             dynamic_batchsize=args.dynamic_batchsize,
-            dynamic_batch_level=args.dynamic_batch_level,
             tokens_per_global_batch=args.tokens_per_global_batch,
         )
     else:
@@ -63,7 +62,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, is_training=False):
         dataset: T5SupervisedDataset
         cluster_spec = PlOptCluster(
             args.plopt_device_to_node,
-            args.plopt_device_memory_limits,
+            [args.plopt_device_memory_limit] * len(args.plopt_device_to_node),
             args.plopt_intra_node_bw,
             args.plopt_inter_node_bw,
             args.plopt_intra_node_lat,
@@ -79,14 +78,14 @@ def build_pretraining_data_loader(dataset, consumed_samples, is_training=False):
                                 args.hidden_size, args.num_attention_heads,
                                 args.ffn_hidden_size, args.kv_channels),
             args.plopt_layer_to_device,
-            args.plopt_device_memory_limits,
+            args.plopt_device_memory_limit,
             prefetch_buffer_size=buffer_size,
         )
         joint_dataloader = JointDataLoader(training_spec,
                                         dataset,
                                         dataset.pack_fn,
                                         dataset.constructor_fn,
-                                        sampler=batch_sampler,
+                                        batch_sampler=batch_sampler,
                                         num_workers=buffer_size,
                                         pin_memory=True)
         return joint_dataloader
@@ -221,7 +220,7 @@ class MegatronPretrainingRandomSampler:
                            * self.micro_batch_size
             bucket_offset = current_epoch_samples // self.data_parallel_size
             start_idx = self.data_parallel_rank * bucket_size
-            
+
             g = torch.Generator()
             g.manual_seed(self.epoch)
             random_idx = torch.randperm(bucket_size, generator=g).tolist()

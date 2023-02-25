@@ -306,6 +306,8 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         assert (
             len(self.sentinel_tokens) > 0
         ), "Provide the argument --vocab-extra-ids 100 to the script"
+        print(" > input sample mapping shapes: ", self.input_samples_mapping.shape)
+        print(" > target sample mapping shapes: ", self.target_samples_mapping.shape)
 
     def get_max_seq_len_from_data(self):
         if self.packed:
@@ -344,11 +346,20 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
 
     def pack_fn(self, tensors):
         tensors_to_cat = []
-        for idx, tensor in enumerate(tensors):
-            tensors_to_cat.append(tensor)
-            if idx != len(tensors) - 1:
-                tensors_to_cat.append(torch.tensor([self.sep_id]))
-        return torch.cat(tensors_to_cat)
+        if isinstance(tensors[0], list):
+            for idx, tensor in enumerate(tensors):
+                tensors_to_cat.extend(tensor)
+                if idx != len(tensors) - 1:
+                    tensors_to_cat.extend([self.sep_id])
+        elif isinstance(tensors[0], torch.Tensor):
+            for idx, tensor in enumerate(tensors):
+                tensors_to_cat.append(tensor)
+                if idx != len(tensors) - 1:
+                    tensors_to_cat.append(torch.tensor([self.sep_id]))
+            tensors_to_cat = torch.cat(tensors_to_cat)
+        else:
+            raise ValueError("Unsupported type in pack_fn: {}".format(type(tensors[0])))
+        return tensors_to_cat
 
     def constructor_fn(self, encoder_input,
                             encoder_extra,

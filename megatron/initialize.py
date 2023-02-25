@@ -263,6 +263,11 @@ def _warmup_jit_function():
     else:
         dtype = torch.float32
 
+    if args.use_plopt:
+        # don't use max sequence length for warmup
+        orig_seq_length = args.seq_length
+        args.seq_length = 512
+
     # Warmup fused bias+gelu
     bias = torch.rand(args.ffn_hidden_size // args.tensor_model_parallel_size,
                       dtype=dtype, device='cuda')
@@ -298,3 +303,5 @@ def _warmup_jit_function():
             output = bias_dropout_add_fused_train(input, bias, residual, dropout_rate)
     del bias, input, residual, output
     torch.cuda.empty_cache()
+    if args.use_plopt:
+        args.seq_length = orig_seq_length
