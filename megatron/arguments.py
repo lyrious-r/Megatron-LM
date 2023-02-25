@@ -29,6 +29,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     parser = _add_logging_args(parser)
     parser = _add_inference_args(parser)
     parser = _add_transformer_engine_args(parser)
+    parser = _add_plopt_args(parser)
 
     # Custom arguments.
     if extra_args_provider is not None:
@@ -352,6 +353,52 @@ def validate_args(args, defaults={}):
                 "Using async gradient all reduce requires setting the environment "
                 "variable CUDA_DEVICE_MAX_CONNECTIONS to 1")
 
+    # plopt args
+    if args.use_plopt:
+        required_plopt_args = ["plopt_cost_model", "plopt_device_to_node",
+                                "plopt_device_memory_limits",
+                                "plopt_intra_node_bw", "plopt_inter_node_bw",
+                                "plopt_intra_node_lat", "plopt_inter_node_lat",
+                                "plopt_layer_to_device"]
+        if any(getattr(args, arg) is None for arg in required_plopt_args):
+            raise RuntimeError(
+                "Using plopt requires setting the arguments {}".format(
+                    ", ".join(required_plopt_args)))
+        try:
+            mappings = args.plopt_device_to_node.split(",")
+            args.plopt_device_to_node = {}
+            for mapping in mappings:
+                device, node = mapping.split(":")
+                args.plopt_device_to_node[int(device)] = int(node)
+        except Exception as e:
+            raise RuntimeError(
+                "Invalid plopt_device_to_node argument: {}".format(e))
+        if len(args.plopt_device_to_node) != args.pipeline_model_parallel_size:
+            raise RuntimeError(
+                "plopt_device_to_node must have the same number of entries as "
+                "pipeline_model_parallel_size")
+        try:
+            device_memory_limits = [int(args.plopt_device_memory_limits)] * \
+                                    len(args.plopt_device_to_node)
+        except ValueError:
+            device_memory_limits = [int(limit) for limit in
+                                    args.plopt_device_memory_limits.split(",")]
+        args.plopt_device_memory_limits = device_memory_limits
+        assert len(args.plopt_device_to_node) == len(device_memory_limits), \
+            "plopt_device_to_node and plopt_device_memory_limits must have " \
+            "the same number of entries"
+        try:
+            args.plopt_layer_to_device = [int(layer) for layer in
+                                        args.plopt_layer_to_device.split(",")]
+        except ValueError:
+            raise RuntimeError(
+                "Invalid plopt_layer_to_device argument: {}".format(e))
+        assert len(args.plopt_layer_to_device) == 2 * args.num_layers, \
+            "plopt_layer_to_device must have 2 * num_layers entries"
+        if not args.plopt_prefetch_planner_num_workers:
+            local_world_size = os.environ.get("LOCAL_WORLD_SIZE", 8)
+            args.plopt_prefetch_planner_num_workers = max(1, os.cpu_count() -
+                2 * args.plopt_prefetch_listener_num_workers * (local_world_size - 1))
 
     _print_args(args)
     return args
@@ -1138,3 +1185,35 @@ def _add_vision_args(parser):
                        help='warmup teacher temperaure epochs')
 
     return parser
+
+def _add_plopt_args(parser):
+    group = parser.add_argument_group(title='plopt')
+    group.add_argument('--use-plopt', action='store_true',
+                       help='Use plopt for training.')
+    group.add_argument('--plopt-cost-model', type=str,
+                        help='Path to serialized plopt cost model.')
+    group.add_argument('--plopt-device-to-node', type=str,
+                        help='Mapping between device ranks to nodes.'
+                             'Format: <device_rank>:<node_rank>,...')
+    group.add_argument('--plopt-device-memory-limits', type=str,
+                        help='Memory limits for each device.'
+                             'A int or a list of ints, in MB.')
+    group.add_argument('--plopt-intra-node-bw', type=int,
+                        help='Intra-node bandwidth in Gbps.')
+    group.add_argument('--plopt-inter-node-bw', type=int,
+                        help='Inter-node bandwidth in Gbps.')
+    group.add_argument('--plopt-intra-node-lat', type=int, default=0,
+                        help='Intra-node latency in us.')
+    group.add_argument('--plopt-inter-node-lat', type=int, default=0,
+                        help='Inter-node latency in us.')
+    group.add_argument('--plopt-layer-to-device', type=str,
+                        help='Mapping between layer ranks to devices.'
+                             'A list of ints.')
+    group.add_argument('--plopt-prefetch-planner-num-workers', type=int,
+                        help='Number of planner workers to use. '
+                             'Suggest to use larger numbers to better '
+                             'overlap preprocessing and training.')
+    group.add_argument('--plopt-prefetch-listener-num-workers', type=int,
+                        default=2, help='Number of listener workers to use. '
+                                        'A small number should be enough.')
+

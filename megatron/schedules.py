@@ -52,7 +52,7 @@ def deallocate_output_tensor(out):
         device = out.device,
         dtype = out.dtype,
     )
-
+        
 def custom_backward(output, grad_output):
     '''Directly call C++ autograd engine.
 

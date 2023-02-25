@@ -7,13 +7,17 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset
 from megatron import get_args
-from megatron import mpu
+from megatron.core import mpu
 from megatron import get_num_microbatches
 from megatron.utils import print_rank_0
 from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
 from typing import Union
 
-def build_pretraining_data_loader(dataset, consumed_samples):
+
+from plopt.model import PlOptCluster, TransformerModelSpec
+from plopt.pipe.data_loader import JointDataLoader, TrainingSpec
+
+def build_pretraining_data_loader(dataset, consumed_samples, is_training=False):
     """Buld dataloader given an input dataset."""
 
     if dataset is None:
@@ -54,9 +58,43 @@ def build_pretraining_data_loader(dataset, consumed_samples):
         raise Exception('{} dataloader type is not supported.'.format(
                 args.dataloader_type))
 
+    if args.use_plopt and is_training:
+        assert isinstance(dataset, T5SupervisedDataset)
+        dataset: T5SupervisedDataset
+        cluster_spec = PlOptCluster(
+            args.plopt_device_to_node,
+            args.plopt_device_memory_limits,
+            args.plopt_intra_node_bw,
+            args.plopt_inter_node_bw,
+            args.plopt_intra_node_lat,
+            args.plopt_inter_node_lat,
+        )
+        buffer_size = args.plopt_prefetch_planner_num_workers \
+                      if mpu.get_pipeline_model_parallel_rank() == 0 else \
+                      args.plopt_prefetch_listener_num_workers
+        training_spec = TrainingSpec(
+            args.plopt_cost_model,
+            cluster_spec,
+            TransformerModelSpec(args.num_layers, args.num_layers,
+                                args.hidden_size, args.num_attention_heads,
+                                args.ffn_hidden_size, args.kv_channels),
+            args.plopt_layer_to_device,
+            args.plopt_device_memory_limits,
+            prefetch_buffer_size=buffer_size,
+        )
+        joint_dataloader = JointDataLoader(training_spec,
+                                        dataset,
+                                        dataset.pack_fn,
+                                        dataset.constructor_fn,
+                                        sampler=batch_sampler,
+                                        num_workers=buffer_size,
+                                        pin_memory=True)
+        return joint_dataloader
+
     # Torch dataloader.
     if isinstance(dataset, T5SupervisedDataset) and not dataset.padded:
-        collate_fn = dataset.dynamic_microbatch_collate_fn
+        # dynamic microbatching
+        collate_fn = dataset.dynamic_batching_collate_fn
     else:
         collate_fn = None
     return torch.utils.data.DataLoader(
@@ -140,16 +178,9 @@ class RandomSeedDataset(Dataset):
 
 
 class MegatronPretrainingRandomSampler:
-    def __init__(
-        self,
-        dataset,
-        total_samples,
-        consumed_samples,
-        micro_batch_size,
-        data_parallel_rank,
-        data_parallel_size,
-        data_sharding,
-    ):
+
+    def __init__(self, dataset, total_samples, consumed_samples, micro_batch_size,
+                 data_parallel_rank, data_parallel_size, data_sharding):
         # Keep a copy of input params for later use.
         self.dataset = dataset
         self.total_samples = total_samples
@@ -171,10 +202,6 @@ class MegatronPretrainingRandomSampler:
         assert self.data_parallel_rank < data_parallel_size, \
             'data_parallel_rank should be smaller than data size: {}, ' \
             '{}'.format(self.data_parallel_rank, data_parallel_size)
-        if isinstance(dataset, (T5UnsupervisedDataset, T5SupervisedDataset)):
-            self.dataset.set_per_sample_seq_len_func(
-                lambda _: (self.dataset.max_seq_length, self.dataset.max_seq_length_dec, False)
-            )
 
     def __len__(self):
         return self.total_samples
@@ -194,7 +221,7 @@ class MegatronPretrainingRandomSampler:
                            * self.micro_batch_size
             bucket_offset = current_epoch_samples // self.data_parallel_size
             start_idx = self.data_parallel_rank * bucket_size
-
+            
             g = torch.Generator()
             g.manual_seed(self.epoch)
             random_idx = torch.randperm(bucket_size, generator=g).tolist()

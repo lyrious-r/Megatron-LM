@@ -40,8 +40,9 @@ from megatron.utils import calc_params_l2_norm
 from megatron.schedules import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
-from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
+from megatron.data.t5_dataset import T5UnsupervisedDataset
 
+from .pipeline_executor import get_pipeline_executor
 
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
@@ -151,10 +152,14 @@ def pretrain(train_valid_test_dataset_provider,
         print("Cuda profiler started.")
         torch.cuda.cudart().cudaProfilerStart()
     if args.do_train and args.train_iters > 0:
-        iteration = train(forward_step_func,
-                          model, optimizer, opt_param_scheduler,
-                          train_data_iterator, valid_data_iterator,
-                          process_non_loss_data_func)
+        if args.use_plopt:
+            itertion = plopt_train(forward_step_func, model, optimizer,
+                                   opt_param_scheduler, train_data_iterator)
+        else:
+            iteration = train(forward_step_func,
+                            model, optimizer, opt_param_scheduler,
+                            train_data_iterator, valid_data_iterator,
+                            process_non_loss_data_func)
     print_datetime('after training is done')
 
     if args.do_valid:
@@ -173,7 +178,7 @@ def pretrain(train_valid_test_dataset_provider,
         evaluate_and_print_results(prefix, forward_step_func,
                                    test_data_iterator, model,
                                    0, process_non_loss_data_func,
-                                   True, shape_iterator=test_shape_iterator)
+                                   True)
     timers.log_all()
 
 def update_train_iters(args):
@@ -477,6 +482,128 @@ def train_step(forward_step_func, data_iterator,
     return {}, skipped_iter, grad_norm, num_zeros_in_grad
 
 
+def plopt_train_step(data_iterator, forward_step_func,
+                     model, optimizer, opt_param_scheduler):
+    """Single training step."""
+    args = get_args()
+    timers = get_timers()
+
+    # Set grad to zero.
+    if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
+        for partition in model:
+            partition.zero_grad_buffer()
+    optimizer.zero_grad()
+
+    # Forward pass.
+    timers('forward-backward', log_level=1).start(
+        barrier=args.barrier_with_L1_time)
+    microbatch, execution_plan = next(data_iterator)
+    microbatch_iterator = iter(microbatch)
+    executor = get_pipeline_executor(forward_step_func, microbatch_iterator, model, optimizer)
+    executor.execute(execution_plan)
+    timers('forward-backward').stop()
+
+    # Empty unused memory.
+    if args.empty_unused_memory_level >= 1:
+        torch.cuda.empty_cache()
+
+    # Reduce gradients.
+    optimizer.reduce_model_grads(args, timers)
+
+    # Vision gradients.
+    if args.vision_pretraining and args.vision_pretraining_type == "dino":
+        unwrapped_model = unwrap_model(model[0],
+                                       (torchDDP, LocalDDP, Float16Module))
+        unwrapped_model.cancel_gradients_last_layer(args.curr_iteration)
+
+    # Update parameters.
+    timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
+    update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
+    timers('optimizer').stop()
+
+    # Gather params.
+    if update_successful:
+        optimizer.gather_model_params(args, timers)
+
+    # Vision momentum.
+    if args.vision_pretraining and args.vision_pretraining_type == "dino":
+        unwrapped_model = unwrap_model(model[0],
+                                       (torchDDP, LocalDDP, Float16Module))
+        unwrapped_model.update_momentum(args.curr_iteration)
+
+    # Update learning rate.
+    if update_successful:
+        increment = get_num_microbatches() * \
+                    args.micro_batch_size * \
+                    args.data_parallel_size
+        opt_param_scheduler.step(increment=increment)
+        skipped_iter = 0
+    else:
+        skipped_iter = 1
+
+    # Empty unused memory.
+    if args.empty_unused_memory_level >= 2:
+        torch.cuda.empty_cache()
+
+    if mpu.is_pipeline_last_stage(ignore_virtual=True):
+        # Average loss across microbatches.
+        # loss_reduced = {}
+        # for key in losses_reduced[0]:
+        #     losses_reduced_for_key = [x[key] for x in losses_reduced]
+        #     loss_reduced[key] = sum(losses_reduced_for_key) / len(losses_reduced_for_key)
+        return {}, skipped_iter, grad_norm, num_zeros_in_grad
+    return {}, skipped_iter, grad_norm, num_zeros_in_grad
+
+def training_log_wo_tfboard(iteration, report_memory_flag):
+    """Log training information such as losses, timing, ...."""
+    args = get_args()
+    timers = get_timers()
+    # Logging.
+    timers_to_log = [
+        'forward-backward',
+        'forward-compute',
+        'backward-compute',
+        'batch-generator',
+        'forward-recv',
+        'forward-send',
+        'backward-recv',
+        'backward-send',
+        'forward-send-forward-recv',
+        'forward-send-backward-recv',
+        'backward-send-forward-recv',
+        'backward-send-backward-recv',
+        'forward-backward-send-forward-backward-recv',
+        'layernorm-grads-all-reduce',
+        'embedding-grads-all-reduce',
+        'grads-all-reduce',
+        'grads-reduce-scatter',
+        'params-all-gather',
+        'optimizer-copy-to-main-grad',
+        'optimizer-unscale-and-check-inf',
+        'optimizer-clip-main-grad',
+        'optimizer-count-zeros',
+        'optimizer-inner-step',
+        'optimizer-copy-main-to-model-params',
+        'optimizer']
+
+    if iteration % args.log_interval == 0:
+        elapsed_time = timers('interval-time').elapsed(barrier=True)
+        elapsed_time_per_iteration = elapsed_time / args.log_interval
+        log_string = ' iteration {:8d}/{:8d} |'.format(
+            iteration, args.train_iters)
+        log_string += ' consumed samples: {:12d} |'.format(
+            args.consumed_train_samples)
+        log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(
+            elapsed_time_per_iteration * 1000.0)
+        print_rank_last(log_string)
+        if report_memory_flag:
+            # Report memory after optimizer state has been initialized.
+            report_memory('(after {} iterations)'.format(iteration))
+            report_memory_flag = False
+        timers.log(timers_to_log, normalizer=args.log_interval)
+
+    return report_memory_flag
+
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
                  grad_norm, params_norm, num_zeros_in_grad):
@@ -662,6 +789,71 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler):
     timers('save-checkpoint').stop(barrier=True)
     timers.log(['save-checkpoint'])
 
+def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
+          train_data_iterator):
+    """Train the model function. Removed irrelavant code for testing."""
+    args = get_args()
+    timers = get_timers()
+
+    # Turn on training mode which enables dropout.
+    for model_module in model:
+        model_module.train()
+
+    # Tracking loss.
+    total_loss_dict = {}
+
+    # Iterations.
+    orig_iteration = args.iteration
+    iteration = args.iteration
+
+    timers('interval-time', log_level=0).start(barrier=True)
+    print_datetime('before the start of training step')
+    report_memory_flag = True
+    while iteration < args.train_iters:
+        timers('iteration-time').start()
+        update_num_microbatches(args.consumed_train_samples)
+        args.curr_iteration = iteration
+        try:
+            plopt_train_step(
+                        train_data_iterator,
+                        forward_step_func,
+                        model,
+                        optimizer,
+                        opt_param_scheduler)
+        except StopIteration:
+            # run out of data
+            break
+        iteration += 1
+        if args.profile_with_nsys and iteration - orig_iteration >= 20:
+            torch.cuda.cudart().cudaProfilerStop()
+        args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
+                                       args.micro_batch_size * \
+                                       get_num_microbatches()
+        timers('iteration-time').stop()
+        if args.per_iter_time_log_path is not None:
+            with open(args.per_iter_time_log_path, 'a') as f:
+                f.write(str(timers('iteration-time').elapsed()) + "\n")
+        # Logging.
+        report_memory_flag = training_log_wo_tfboard(iteration, report_memory_flag)
+
+        # Exiting based on duration
+        if args.exit_duration_in_mins:
+            train_time = (time.time() - _TRAIN_START_TIME) / 60.0
+            done_cuda = torch.cuda.IntTensor(
+                [train_time > args.exit_duration_in_mins])
+            torch.distributed.all_reduce(
+                done_cuda, op=torch.distributed.ReduceOp.MAX)
+            done = done_cuda.item()
+            if done:
+                print_datetime('exiting program after {} minutes'.format(train_time))
+                sys.exit()
+
+        # Exiting based on iterations
+        if args.exit_interval and iteration % args.exit_interval == 0:
+            torch.distributed.barrier()
+            print_datetime('exiting program at iteration {}'.format(iteration))
+            sys.exit()
+    return iteration
 
 def train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator, valid_data_iterator,
@@ -925,11 +1117,11 @@ def build_train_valid_test_data_iterators(
 
         # Build dataloders.
         train_dataloader = build_pretraining_data_loader(
-            train_ds, args.consumed_train_samples)
+            train_ds, args.consumed_train_samples, is_training=True)
         valid_dataloader = build_pretraining_data_loader(
-            valid_ds, args.consumed_valid_samples)
-        test_dataloader = build_pretraining_data_loader(test_ds, 0)
-        if isinstance(train_ds, (T5UnsupervisedDataset, T5SupervisedDataset)):
+            valid_ds, args.consumed_valid_samples, is_training=False)
+        test_dataloader = build_pretraining_data_loader(test_ds, 0, is_training=False)
+        if isinstance(train_ds, T5UnsupervisedDataset):
             input_padding_eff, target_padding_eff = train_ds.get_padding_efficiency()
             print_rank_0(' > training set padding efficiency:')
             print_rank_0('    input:      {}'.format(input_padding_eff))
@@ -959,7 +1151,7 @@ def build_train_valid_test_data_iterators(
 
     if train_dataloader is not None:
         train_data_iterator = iter(train_dataloader) if dl_type == 'single' \
-                              else iter(cyclic_iter(train_dataloader))
+                            else iter(cyclic_iter(train_dataloader))
     else:
         train_data_iterator = None
 
