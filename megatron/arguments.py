@@ -387,7 +387,7 @@ def validate_args(args, defaults={}):
             "plopt_layer_to_device must have 2 * num_layers entries"
         if not args.plopt_prefetch_planner_num_workers:
             local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 8))
-            args.plopt_prefetch_planner_num_workers = max(1, os.cpu_count() -
+            args.plopt_prefetch_planner_num_workers = max(1, os.cpu_count() / 2 -
                 2 * args.plopt_prefetch_listener_num_workers * (local_world_size - 1))
 
     _print_args(args)

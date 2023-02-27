@@ -359,7 +359,8 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             tensors_to_cat = torch.cat(tensors_to_cat)
         else:
             raise ValueError("Unsupported type in pack_fn: {}".format(type(tensors[0])))
-        return tensors_to_cat
+        # currently do not return packing masks
+        return tensors_to_cat, 0
 
     def constructor_fn(self, encoder_input,
                             encoder_extra,
@@ -566,8 +567,14 @@ def build_supervised_training_sample(input_sample, target_sample,
     """
 
     # flatten sentences into one list
-    input_tokens = [token for sentence in input_sample for token in sentence]
-    target_tokens = [token for sentence in target_sample for token in sentence]
+    if isinstance(input_sample[0], list):
+        input_tokens = [token for sentence in input_sample for token in sentence]
+    else:
+        input_tokens = input_sample
+    if isinstance(target_sample[0], list):
+        target_tokens = [token for sentence in target_sample for token in sentence]
+    else:
+        target_tokens = target_sample
 
     # Truncate to `max_seq_length`.
     input_max_num_tokens = max_seq_length

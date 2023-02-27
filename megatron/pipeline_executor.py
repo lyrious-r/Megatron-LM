@@ -42,13 +42,26 @@ def _handle_load_input(exec: PipelineExecutor, instr: LoadInput):
 #     return _handle_load_input
 
 def _create_forward_handler(forward_step_func, data_iterator, model):
+    assert len(model) == 1, "Only support non-interleaved placement now."
+    model = model[0]
     args = get_args()
     timers = get_timers()
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
     def _handle_forward(exec: PipelineExecutor, instr: ForwardPass):
         with torch.cuda.nvtx.range("forward_{}_{}".format(instr.microbatch, instr.stage)):
             buffer_ids = instr.buffer_ids
+            # in decoder stage, there should be two input tensors
+            # first one is received encoder activation, second is last decoder
+            # layer's output (or data loaded from data loader)
+            # Megatron-LM expects the first one to be decoder input, so we
+            # need to swap them
             input_tensor = [exec.buffer_slots[buffer_id] for buffer_id in buffer_ids if exec.buffer_slots[buffer_id] is not None]
+            if len(input_tensor) == 2:
+                new_input_tensor = [input_tensor[1], input_tensor[0]]
+                input_tensor = new_input_tensor
+            if len(input_tensor) == 0:
+                # no input tensor, load from dataloader
+                input_tensor = None
             # create a bunch of local stores
             if not hasattr(exec, "input_tensors"):
                 exec.input_tensors = {}
@@ -59,10 +72,22 @@ def _create_forward_handler(forward_step_func, data_iterator, model):
             if not hasattr(exec, "forward_data_store"):
                 exec.forward_data_store = []
             outputs = forward_step(forward_step_func, data_iterator, model, input_tensor, exec.forward_data_store, fwd_bwd_timers, collect_non_loss_data=False)
-            exec.output_tensors[key] = outputs
+            # output_tensors saves the output tensor and a flag indicating
+            # whether the tensor should be freed after communication
+            # the order of output_tensors follows Megatron-LM
+            if isinstance(outputs, list):
+                exec.output_tensors[key] = list(zip(outputs, [True, False] if len(outputs) == 2 else [True]))
+            else:
+                exec.output_tensors[key] = [(outputs, True)]
+            if len(outputs) == 2:
+                # decoder stage, first output is decoder output, second is
+                # encoder activation. We need to swap them to match plopt's
+                # order
+                new_outputs = [outputs[1], outputs[0]]
+                outputs = new_outputs
+
             if not isinstance(outputs, list):
                 outputs = [outputs]
-            deallocate_output_tensor(outputs[0])
             assert len(outputs) <= len(buffer_ids), "Number of outputs is greater than number of buffers"
             # output may not use all the buffers
             # we only fill the first len(outputs) buffers
@@ -80,15 +105,27 @@ def _create_backward_handler(optimizer):
             assert hasattr(exec, "input_tensors")
             assert hasattr(exec, "output_tensors")
             buffer_ids = instr.buffer_ids
-            key = (instr.microbatch, instr.stage // 2)
+            key = (instr.microbatch, exec.execution_plan.nstages - instr.stage)
             input_tensor = exec.input_tensors[key]
             exec.input_tensors[key] = None
-            output_tensor = exec.output_tensors[key]
+            output_tensor, _ = zip(*exec.output_tensors[key])
+            output_tensor = list(output_tensor)
             exec.output_tensors[key] = None
             output_tensor_grad = [exec.buffer_slots[buffer_id] for buffer_id in buffer_ids if exec.buffer_slots[buffer_id] is not None]
+            # same here, if there are two output tensor grads, we need to swap them
+            # to match Megatron-LM's order (decoder output, encoder activation)
+            if len(output_tensor_grad) == 2:
+                new_output_tensor_grad = [output_tensor_grad[1], output_tensor_grad[0]]
+                output_tensor_grad = new_output_tensor_grad
             input_tensor_grad = \
                     backward_step(optimizer, input_tensor, output_tensor,
                                 output_tensor_grad, fwd_bwd_timers)
+            if not isinstance(input_tensor_grad, list):
+                input_tensor_grad = [input_tensor_grad]
+            # swap them back
+            if len(input_tensor_grad) == 2:
+                new_input_tensor_grad = [input_tensor_grad[1], input_tensor_grad[0]]
+                input_tensor_grad = new_input_tensor_grad
             # output may not use all the buffers
             # we only fill the first len(outputs) buffers
             for buffer_id, output in zip(buffer_ids[:len(input_tensor_grad)], input_tensor_grad):
@@ -106,14 +143,24 @@ _comm_instr_key_map = {
     RecvGradFinish: "grad",
 }
 
+def _transpose_tensor_shape(tensor_shape):
+    # Megatron-LM expect communicated tensors to be
+    # (sequence length, microbatch size, hidden size)
+    # while plopt expects them to be
+    # (microbatch size, sequence length, hidden size)
+    return (tensor_shape[1], tensor_shape[0], tensor_shape[2])
+
 def _handle_send_start(exec: PipelineExecutor, instr: CommunicationStartInstruction):
     output_tensors = [exec.buffer_slots[buffer_id] for buffer_id in instr.buffer_ids if exec.buffer_slots[buffer_id] is not None]
     if not isinstance(output_tensors, list):
         output_tensors = [output_tensors]
     tensor_shapes = instr.buffer_shapes
-    assert len(output_tensors) == len(tensor_shapes), (
+    # transpose tensor shapes
+    tensor_shapes = [_transpose_tensor_shape(s) for s in tensor_shapes]
+    assert len(output_tensors) >= len(tensor_shapes), (
         "Number of output tensors and number of tensor shapes do not match."
         " Expected {}, got {}".format(len(output_tensors), len(tensor_shapes)))
+    output_tensors = output_tensors[:len(tensor_shapes)]
     pending_ops = []
     for (output_tensor, tensor_shape) in zip(output_tensors, tensor_shapes):
         if tensor_shape is None:
@@ -132,6 +179,16 @@ def _handle_send_finish(exec: PipelineExecutor, instr: CommunicationFinishInstur
     for op in pending_ops:
         op.wait()
 
+def _handle_send_forward_finish(exec: PipelineExecutor, instr: CommunicationFinishInsturction):
+    # wait
+    _handle_send_finish(exec, instr)
+    # free output tensor if needed
+    output_key = (instr.microbatch, instr.stage)
+    output_tensors = exec.output_tensors[output_key]
+    for (output_tensor, free) in output_tensors:
+        if free:
+            deallocate_output_tensor(output_tensor)
+
 def _handle_recv_start(exec: PipelineExecutor, instr: CommunicationStartInstruction):
     args=get_args()
     dtype = args.params_dtype
@@ -139,6 +196,8 @@ def _handle_recv_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
         dtype = torch.float
     requires_grad = True
     tensor_shapes = instr.buffer_shapes
+    # transpose tensor shapes
+    tensor_shapes = [_transpose_tensor_shape(s) for s in tensor_shapes]
     input_tensors = [torch.empty(tensor_shape, dtype=dtype, requires_grad=requires_grad, device=torch.cuda.current_device()) for tensor_shape in tensor_shapes]
     pending_ops = []
     for (input_tensor, tensor_shape) in zip(input_tensors, tensor_shapes):
@@ -162,7 +221,7 @@ def _handle_recv_finish(exec: PipelineExecutor, instr: CommunicationFinishInstur
         op.wait()
 
 def get_pipeline_executor(forward_step_func, data_iterator, model, optimizer):
-    executor = PipelineExecutor()
+    executor = PipelineExecutor(rank=mpu.get_pipeline_model_parallel_rank())
     # register handlers
     executor.register_handler(LoadInput, _handle_load_input)
     executor.register_handler(ForwardPass, _create_forward_handler(forward_step_func, data_iterator, model))
@@ -172,7 +231,7 @@ def get_pipeline_executor(forward_step_func, data_iterator, model, optimizer):
     executor.register_handler(SendGradStart, _handle_send_start)
     executor.register_handler(RecvActivationStart, _handle_recv_start)
     executor.register_handler(RecvGradStart, _handle_recv_start)
-    executor.register_handler(SendActivationFinish, _handle_send_finish)
+    executor.register_handler(SendActivationFinish, _handle_send_forward_finish)
     executor.register_handler(SendGradFinish, _handle_send_finish)
     executor.register_handler(RecvActivationFinish, _handle_recv_finish)
     executor.register_handler(RecvGradFinish, _handle_recv_finish)
