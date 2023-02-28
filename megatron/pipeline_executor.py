@@ -41,14 +41,32 @@ def _handle_load_input(exec: PipelineExecutor, instr: LoadInput):
 #             exec.buffer_slots[buffer_id] = tensor 
 #     return _handle_load_input
 
-def _create_forward_handler(forward_step_func, data_iterator, model):
-    assert len(model) == 1, "Only support non-interleaved placement now."
-    model = model[0]
+def _create_forward_handler(forward_step_func, data_iterators, models):
     args = get_args()
     timers = get_timers()
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
     def _handle_forward(exec: PipelineExecutor, instr: ForwardPass):
         with torch.cuda.nvtx.range("forward_{}_{}".format(instr.microbatch, instr.stage)):
+            if args.virtual_pipeline_model_parallel_size is not None:
+                # interleaved scheduling
+                # needs to call set_virtual_pipeline_model_parallel_rank before
+                # forward and backward
+                # first get the current model chunk id from the instruction
+                if not hasattr(exec, "_rev_chunk_index"):
+                    exec._rev_chunk_index = {}
+                    n_assigned_chunks = len(exec.execution_plan.assigned_stages)
+                    for i, chunk in enumerate(exec.execution_plan.assigned_stages):
+                        if i >= n_assigned_chunks // 2:
+                            # backward chunk
+                            i = n_assigned_chunks - i - 1
+                        exec._rev_chunk_index[chunk] = i
+                chunk_id = exec._rev_chunk_index[instr.stage]
+                model = models[chunk_id]
+                data_iterator = data_iterators[chunk_id]
+                mpu.set_virtual_pipeline_model_parallel_rank(chunk_id)
+            else:
+                model = models[0]
+                data_iterator = data_iterators[0]
             buffer_ids = instr.buffer_ids
             # in decoder stage, there should be two input tensors
             # first one is received encoder activation, second is last decoder
@@ -101,6 +119,10 @@ def _create_backward_handler(optimizer):
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
     def _handle_backward(exec: PipelineExecutor, instr: BackwardPass):
         with torch.cuda.nvtx.range("backward_{}_{}".format(instr.microbatch, instr.stage)):
+            if args.virtual_pipeline_model_parallel_size is not None:
+                assert hasattr(exec, "_rev_chunk_index")
+                chunk_id = exec._rev_chunk_index[instr.stage]
+                mpu.set_virtual_pipeline_model_parallel_rank(chunk_id)
             # interleaved scheduling is more involved, supporting it later
             assert hasattr(exec, "input_tensors")
             assert hasattr(exec, "output_tensors")

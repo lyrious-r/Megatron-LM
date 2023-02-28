@@ -819,7 +819,7 @@ class NoopTransformerLayer(MegatronModule):
 def _get_num_layers(args, is_encoder_and_decoder_model, is_decoder=False):
     """Compute the number of transformer layers resident on the current rank."""
     if mpu.get_pipeline_model_parallel_world_size() > 1:
-        if is_encoder_and_decoder_model:
+        if is_encoder_and_decoder_model and args.virtual_pipeline_model_parallel_size is None:
             assert args.pipeline_model_parallel_split_rank is not None
 
             # When a standalone embedding stage is used, a rank is taken from
@@ -847,6 +847,8 @@ def _get_num_layers(args, is_encoder_and_decoder_model, is_decoder=False):
                 num_layers = args.decoder_num_layers // num_ranks_in_decoder
         else:
             assert args.num_layers == args.encoder_num_layers
+            if is_encoder_and_decoder_model:
+                assert args.num_layers == args.decoder_num_layers
             assert args.num_layers % args.transformer_pipeline_model_parallel_size == 0, \
                 'num_layers must be divisible by transformer_pipeline_model_parallel_size'
 
@@ -973,13 +975,17 @@ class ParallelTransformer(MegatronModule):
                     fuse_qkv_params=True)
 
         if args.virtual_pipeline_model_parallel_size is not None:
-            assert args.num_layers % args.virtual_pipeline_model_parallel_size == 0, \
+            is_encoder_decoder = args.model_type == ModelType.encoder_and_decoder
+            virtual_pipeline_model_parallel_size = args.virtual_pipeline_model_parallel_size
+            if is_encoder_decoder:
+                virtual_pipeline_model_parallel_size = virtual_pipeline_model_parallel_size // 2
+            assert args.num_layers % virtual_pipeline_model_parallel_size == 0, \
                 'num_layers_per_stage must be divisible by ' \
                 'virtual_pipeline_model_parallel_size'
-            assert args.model_type != ModelType.encoder_and_decoder
+            # assert args.model_type != ModelType.encoder_and_decoder
             # Number of layers in each model chunk is the number of layers in the stage,
             # divided by the number of model chunks in a stage.
-            self.num_layers = self.num_layers // args.virtual_pipeline_model_parallel_size
+            self.num_layers = self.num_layers // virtual_pipeline_model_parallel_size
             # With 8 layers, 2 stages, and 4 model chunks, we want an assignment of
             # layers to stages like (each list is a model chunk):
             # Stage 0: [0]  [2]  [4]  [6]
@@ -988,8 +994,20 @@ class ParallelTransformer(MegatronModule):
             # layers to stages like (each list is a model chunk):
             # Stage 0: [0, 1]  [4, 5]
             # Stage 1: [2, 3]  [6, 7]
-            offset = mpu.get_virtual_pipeline_model_parallel_rank() * (
-                args.num_layers // args.virtual_pipeline_model_parallel_size) + \
+            # for enc dec models, offset is the same for encoder and decoder
+            chunk_idx = mpu.get_virtual_pipeline_model_parallel_rank()
+            if is_encoder_decoder:
+                # here chunk_idx is per each encoder and decoder
+                # virtual pipeline model parallel rank counts both
+                # encoder and decoder chunks, so we need to divide
+                n_chunks_in_enc = args.virtual_pipeline_model_parallel_size // 2
+                if layer_type == LayerType.decoder:
+                    assert chunk_idx >= n_chunks_in_enc
+                    chunk_idx -= n_chunks_in_enc
+                n_layers_per_chunk = self.num_layers // n_chunks_in_enc
+            else:
+                n_layers_per_chunk = self.num_layers // args.virtual_pipeline_model_parallel_size
+            offset = chunk_idx * n_layers_per_chunk + \
                 (mpu.get_pipeline_model_parallel_rank() * self.num_layers)
         else:
             # Each stage gets a contiguous set of layers.

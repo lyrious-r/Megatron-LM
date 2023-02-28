@@ -17,7 +17,7 @@ from typing import Union
 from plopt.model import PlOptCluster, TransformerModelSpec
 from plopt.pipe.data_loader import JointDataLoader, TrainingSpec
 
-def build_pretraining_data_loader(dataset, consumed_samples, is_training=False):
+def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, n_virtual_pp_ranks=1, is_training=False):
     """Buld dataloader given an input dataset."""
 
     if dataset is None:
@@ -85,6 +85,8 @@ def build_pretraining_data_loader(dataset, consumed_samples, is_training=False):
                                         dataset,
                                         dataset.pack_fn,
                                         dataset.constructor_fn,
+                                        virtual_rank=virtual_pp_rank,
+                                        n_virtual_ranks=n_virtual_pp_ranks,
                                         batch_sampler=batch_sampler,
                                         num_workers=buffer_size,
                                         pin_memory=True)

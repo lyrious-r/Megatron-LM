@@ -123,6 +123,16 @@ def validate_args(args, defaults={}):
         else:
             setattr(args, key, defaults[key])
 
+    # Num layers
+    if args.num_layers is not None:
+        assert args.encoder_num_layers is None, \
+            'cannot have both num-layers and encoder-num-layers specified'
+        args.encoder_num_layers = args.num_layers
+    else:
+        assert args.encoder_num_layers is not None, \
+            'either num-layers or encoder-num-layers should be specified'
+        args.num_layers = args.encoder_num_layers 
+
     # Batch size.
     assert args.micro_batch_size is not None
     assert args.micro_batch_size > 0
@@ -140,8 +150,20 @@ def validate_args(args, defaults={}):
             'number of layers is not divisible by number of layers per virtual ' \
             'pipeline stage'
         args.virtual_pipeline_model_parallel_size = \
-            (args.num_layers // args.transformer_pipeline_model_parallel_size) // \
-            args.num_layers_per_virtual_pipeline_stage
+                (args.num_layers // args.transformer_pipeline_model_parallel_size) // \
+                args.num_layers_per_virtual_pipeline_stage
+        if args.decoder_num_layers is not None:
+            # encoder decoder model
+            assert args.encoder_num_layers == args.decoder_num_layers, \
+                'encoder and decoder number of layers should be equal with ' \
+                'interleaved schedule'
+            # since num_layers is equal to encoder_num_layers, we need to
+            # double the virtual pipeline model parallel size
+            args.virtual_pipeline_model_parallel_size = \
+                args.virtual_pipeline_model_parallel_size * 2
+        print("virtual_pipeline_model_parallel_size: {}".format(
+            args.virtual_pipeline_model_parallel_size), flush=True)
+
     else:
         args.virtual_pipeline_model_parallel_size = None
 
@@ -233,15 +255,6 @@ def validate_args(args, defaults={}):
             assert args.lr_warmup_samples == 0, \
                 'can only specify one of lr-warmup-fraction ' \
                 'and lr-warmup-samples'
-
-    if args.num_layers is not None:
-        assert args.encoder_num_layers is None, \
-            'cannot have both num-layers and encoder-num-layers specified'
-        args.encoder_num_layers = args.num_layers
-    else:
-        assert args.encoder_num_layers is not None, \
-            'either num-layers or encoder-num-layers should be specified'
-        args.num_layers = args.encoder_num_layers
 
     # Check required arguments.
     required_args = ['num_layers', 'hidden_size', 'num_attention_heads',

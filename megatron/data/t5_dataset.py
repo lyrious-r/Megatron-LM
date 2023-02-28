@@ -306,8 +306,8 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         assert (
             len(self.sentinel_tokens) > 0
         ), "Provide the argument --vocab-extra-ids 100 to the script"
-        print(" > input sample mapping shapes: ", self.input_samples_mapping.shape)
-        print(" > target sample mapping shapes: ", self.target_samples_mapping.shape)
+        print_rank_0(" > input sample mapping shapes: {}".format(self.input_samples_mapping.shape))
+        print_rank_0(" > target sample mapping shapes: {}".format(self.target_samples_mapping.shape))
 
     def get_max_seq_len_from_data(self):
         if self.packed:

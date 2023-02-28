@@ -59,6 +59,7 @@ def model_provider(pre_process=True, post_process=True,
     """Build the model."""
 
     print_rank_0('building T5 model ...')
+    from megatron.core import mpu
     model = T5Model(num_tokentypes=0,
                     parallel_output=True,
                     pre_process=pre_process,

@@ -122,8 +122,8 @@ def pretrain(train_valid_test_dataset_provider,
     if args.virtual_pipeline_model_parallel_size is not None:
         all_data_iterators = [
             build_train_valid_test_data_iterators(
-                train_valid_test_dataset_provider)
-            for _ in range(len(model))
+                train_valid_test_dataset_provider, virtual_pp_rank=idx, n_virtual_pp_ranks=len(model))
+            for idx in range(len(model))
         ]
         train_data_iterator = [data_iterators[0]
                                for data_iterators in all_data_iterators]
@@ -219,18 +219,34 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     # Build model.
     if mpu.get_pipeline_model_parallel_world_size() > 1 and \
        args.virtual_pipeline_model_parallel_size is not None:
-        assert model_type != ModelType.encoder_and_decoder, \
-            "Interleaved schedule not supported for model with both encoder and decoder"
+        # assert model_type != ModelType.encoder_and_decoder, \
+        #     "Interleaved schedule not supported for model with both encoder and decoder"
         model = []
         for i in range(args.virtual_pipeline_model_parallel_size):
             mpu.set_virtual_pipeline_model_parallel_rank(i)
             # Set pre_process and post_process only after virtual rank is set.
-            pre_process = mpu.is_pipeline_first_stage()
-            post_process = mpu.is_pipeline_last_stage()
-            this_model = model_provider_func(
-                pre_process=pre_process,
-                post_process=post_process
-            )
+            if model_type == ModelType.encoder_and_decoder:
+                pre_process = mpu.is_pipeline_first_stage(ignore_virtual=True) and (i == 0 or i == args.virtual_pipeline_model_parallel_size // 2)
+                post_process = mpu.is_pipeline_last_stage(ignore_virtual=True) and (i == args.virtual_pipeline_model_parallel_size - 1)
+                if i < args.virtual_pipeline_model_parallel_size // 2:
+                    add_encoder = True
+                    add_decoder = False
+                else:
+                    add_encoder = False
+                    add_decoder = True
+                this_model = model_provider_func(
+                    pre_process=pre_process,
+                    post_process=post_process,
+                    add_encoder=add_encoder,
+                    add_decoder=add_decoder,
+                )
+            else:
+                pre_process = mpu.is_pipeline_first_stage()
+                post_process = mpu.is_pipeline_last_stage()
+                this_model = model_provider_func(
+                    pre_process=pre_process,
+                    post_process=post_process,
+                )
             this_model.model_type = model_type
             model.append(this_model)
     else:
@@ -264,6 +280,22 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 
     if not isinstance(model, list):
         model = [model]
+
+    # share embedding and positional embedding weights if using interleaved
+    # schedule and T5
+    if model_type == ModelType.encoder_and_decoder and \
+         mpu.get_pipeline_model_parallel_world_size() > 1 and \
+            args.virtual_pipeline_model_parallel_size is not None \
+            and mpu.is_pipeline_first_stage(ignore_virtual=True):
+        assert len(model) % 2 == 0, \
+            "Number of encoder and decoder chunks should be even for interleaved schedule"
+        first_encoder = model[0]
+        first_decoder = model[len(model) // 2]
+        assert hasattr(first_encoder.language_model, 'embedding'), \
+            "First encoder layer should have embedding attribute"
+        assert hasattr(first_decoder.language_model, 'embedding'), \
+            "First decoder layer should have embedding attribute"
+        first_decoder.language_model.embedding = first_encoder.language_model.embedding
 
     # Disallow training and inference with Transformer Engine
     # for non-GPT models
@@ -497,8 +529,20 @@ def plopt_train_step(data_iterator, forward_step_func,
     # Forward pass.
     timers('forward-backward', log_level=1).start(
         barrier=args.barrier_with_L1_time)
-    microbatch, execution_plan = next(data_iterator)
-    microbatch_iterator = iter(microbatch)
+    
+    if isinstance(data_iterator, list):
+        # interleaved schedule
+        microbatch_iterator = []
+        execution_plan = None
+        for iterator in data_iterator:
+            mb, ep = next(iterator)
+            microbatch_iterator.append(iter(mb))
+            # execution plan should be the same for all iterators
+            if execution_plan is None:
+                execution_plan = ep
+    else:
+        microbatch, execution_plan = next(data_iterator)
+        microbatch_iterator = iter(microbatch)
     executor = get_pipeline_executor(forward_step_func, microbatch_iterator, model, optimizer)
     executor.execute(execution_plan)
     timers('forward-backward').stop()
@@ -1072,7 +1116,7 @@ def cyclic_iter(iter):
             yield x
 
 def build_train_valid_test_data_iterators(
-        build_train_valid_test_datasets_provider):
+        build_train_valid_test_datasets_provider, virtual_pp_rank=0, n_virtual_pp_ranks=1):
     """XXX"""
     args = get_args()
 
@@ -1117,7 +1161,7 @@ def build_train_valid_test_data_iterators(
 
         # Build dataloders.
         train_dataloader = build_pretraining_data_loader(
-            train_ds, args.consumed_train_samples, is_training=True)
+            train_ds, args.consumed_train_samples, virtual_pp_rank=virtual_pp_rank, n_virtual_pp_ranks=n_virtual_pp_ranks, is_training=True)
         valid_dataloader = build_pretraining_data_loader(
             valid_ds, args.consumed_valid_samples, is_training=False)
         test_dataloader = build_pretraining_data_loader(test_ds, 0, is_training=False)
