@@ -740,6 +740,10 @@ def _add_training_args(parser):
                        help='Use dynamic batch size for training')
     group.add_argument('--profile-with-nsys', action="store_true",
                        help='Turn on cudaProfiler flags for nsys profiling')
+    group.add_argument('--nsys-profile-warmup', type=int, default=20,
+                          help='Number of warmup iterations for nsys profiling')
+    group.add_argument('--nsys-profile-steps', type=int, default=20,
+                          help='Number of profiling iterations for nsys profiling')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--per-iter-time-log-path', type=str, default=None,

@@ -69,4 +69,5 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --tokens-per-global-batch 16384 \
        --plopt-prefetch-planner-num-workers 128 \
        --plopt-limit-rc-type none \
-       2>&1 | tee log_t5_plopt_finetune.txt
+       --profile-with-nsys \
+       2>&1 | tee log_t5_plopt_finetune_interleaved.txt

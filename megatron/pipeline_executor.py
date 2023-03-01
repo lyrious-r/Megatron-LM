@@ -91,7 +91,10 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
             mpu.set_virtual_pipeline_model_parallel_rank(chunk_id)
         else:
             model = models[0]
-            data_iterator = data_iterators[0]
+            if isinstance(data_iterators, list):
+                data_iterator = data_iterators[0]
+            else:
+                data_iterator = data_iterators
         buffer_ids = instr.buffer_ids
         # in decoder stage, there should be two input tensors
         # first one is received encoder activation, second is last decoder

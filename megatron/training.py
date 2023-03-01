@@ -148,9 +148,6 @@ def pretrain(train_valid_test_dataset_provider,
         print_rank_0('training for {} epochs.'.format(args.train_epochs))
 
     iteration = 0
-    if args.profile_with_nsys:
-        print("Cuda profiler started.")
-        torch.cuda.cudart().cudaProfilerStart()
     if args.do_train and args.train_iters > 0:
         if args.use_plopt:
             itertion = plopt_train(forward_step_func, model, optimizer,
@@ -868,8 +865,14 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             # run out of data
             break
         iteration += 1
-        if args.profile_with_nsys and iteration - orig_iteration >= 20:
-            torch.cuda.cudart().cudaProfilerStop()
+        if args.profile_with_nsys:
+            from plopt.utils.logger import logger
+            if iteration - orig_iteration == args.nsys_profile_warmup:
+                logger.warning("Cuda profiler started.")
+                torch.cuda.cudart().cudaProfilerStart()
+            if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
+                logger.warning("Cuda profiler stopped.")
+                torch.cuda.cudart().cudaProfilerStop()
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()

@@ -6,6 +6,7 @@ import torch
 from typing import Optional
 
 from .utils import GlobalMemoryBuffer
+from megatron import get_args
 
 # Intra-layer model parallel group that the current rank belongs to.
 _TENSOR_MODEL_PARALLEL_GROUP = None
@@ -206,6 +207,13 @@ def initialize_model_parallel(
     # put this. If we end up with a more generic initialization of megatron-core
     # we could stick it there
     _set_global_memory_buffer()
+
+    # hijack the plopt logger
+    args = get_args()
+    if args.use_plopt:
+        import plopt
+        logger = plopt.utils.logger.create_logger("Megatron", distributed_rank=get_pipeline_model_parallel_rank())
+        plopt.utils.logger.logger = logger
 
 
 def model_parallel_is_initialized():
