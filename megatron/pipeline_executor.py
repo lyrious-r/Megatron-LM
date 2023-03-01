@@ -12,6 +12,16 @@ from megatron.model import Float16Module, ModelType
 from megatron.core import mpu
 from megatron.schedules import forward_step, backward_step, deallocate_output_tensor
 
+def recompute_level_to_flag(recompute_lvl: RecomputeMethod):
+    if recompute_lvl == RecomputeMethod.NONE:
+        return None
+    elif recompute_lvl == RecomputeMethod.FULL:
+        return "full"
+    elif recompute_lvl == RecomputeMethod.SELECTIVE:
+        return "selective"
+    else:
+        raise ValueError("Unknown recompute level: {}".format(recompute_lvl))
+
 def _handle_load_input(exec: PipelineExecutor, instr: LoadInput):
     # just set buffers to none, since actual loading is done 
     # in the forward pass
@@ -47,6 +57,9 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
     def _handle_forward(exec: PipelineExecutor, instr: ForwardPass):
         with torch.cuda.nvtx.range("forward_{}_{}".format(instr.microbatch, instr.stage)):
+            # set recompute flag
+            flag = recompute_level_to_flag(exec.execution_plan.recompute_method)
+            mpu.set_recomputation_level(flag)
             if args.virtual_pipeline_model_parallel_size is not None:
                 # interleaved scheduling
                 # needs to call set_virtual_pipeline_model_parallel_rank before

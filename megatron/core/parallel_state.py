@@ -47,6 +47,9 @@ _DATA_PARALLEL_GLOBAL_RANKS = None
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
+# Flags for dynamic recomputation
+_RECOMPUTATION_LEVEL = None
+
 
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
@@ -500,6 +503,16 @@ def get_global_memory_buffer():
     """Return the global GlobalMemoryBuffer object"""
     assert _GLOBAL_MEMORY_BUFFER is not None, 'global memory buffer is not initialized'
     return _GLOBAL_MEMORY_BUFFER
+
+def set_recomputation_level(level):
+    """Set the recomputation level."""
+    global _RECOMPUTATION_LEVEL
+    _RECOMPUTATION_LEVEL = level
+
+def get_recomputation_level():
+    """Return the recomputation level."""
+    global _RECOMPUTATION_LEVEL
+    return _RECOMPUTATION_LEVEL
 
 
 def destroy_model_parallel():

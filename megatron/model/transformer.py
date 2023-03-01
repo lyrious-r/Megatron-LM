@@ -427,7 +427,6 @@ class ParallelAttention(MegatronModule):
 
         self.core_attention = CoreAttention(self.layer_number,
                                             self.attn_mask_type)
-        self.checkpoint_core_attention = args.recompute_granularity == 'selective'
 
         if self.use_flash_attn:
             self.core_attention_flash = FlashSelfAttention(
@@ -442,6 +441,12 @@ class ParallelAttention(MegatronModule):
             init_method=output_layer_init_method,
             skip_bias_add=True,
             **_args_to_kwargs())
+
+    def _checkpoint_core_attention(self):
+        recompute_level = mpu.get_recomputation_level()
+        if recompute_level == "selective":
+            return True
+        return False
 
     def _checkpointed_attention_forward(self, query_layer, key_layer,
                                         value_layer, attention_mask):
@@ -557,7 +562,7 @@ class ParallelAttention(MegatronModule):
         # ==================================
 
         if not self.use_flash_attn:
-            if self.checkpoint_core_attention:
+            if self._checkpoint_core_attention():
                 context_layer = self._checkpointed_attention_forward(
                     query_layer, key_layer, value_layer, attention_mask)
             else:
@@ -894,7 +899,6 @@ class ParallelTransformer(MegatronModule):
         self.transformer_impl = args.transformer_impl
 
         # Store activation checkpoiting flag.
-        self.recompute_granularity = args.recompute_granularity
         self.recompute_method = args.recompute_method
         self.recompute_num_layers = args.recompute_num_layers
         self.distribute_saved_activations = \
@@ -925,7 +929,6 @@ class ParallelTransformer(MegatronModule):
 
         self.num_microbatches_in_previous_step = -1
         self.microbatch_count = 0
-        self.checkpoint_core_attention = args.recompute_granularity == 'selective'
 
         # Number of layers.
         self.num_layers = _get_num_layers(
@@ -1045,6 +1048,12 @@ class ParallelTransformer(MegatronModule):
                 no_persist_layer_norm=args.no_persist_layer_norm,
                 sequence_parallel=args.sequence_parallel)
 
+    def _checkpoint_core_attention(self):
+        recompute_level = mpu.get_recomputation_level()
+        if recompute_level == "selective":
+            return True
+        return False
+
     def _get_layer(self, layer_number):
         return self.layers[layer_number]
 
@@ -1132,7 +1141,7 @@ class ParallelTransformer(MegatronModule):
 
         # Checks.
         if inference_params:
-            assert self.recompute_granularity is None, \
+            assert mpu.get_recomputation_level() is None, \
                 'inference does not work with activation checkpointing'
 
         if not self.pre_process:
@@ -1180,7 +1189,7 @@ class ParallelTransformer(MegatronModule):
                 is_first_microbatch = self.microbatch_count % get_num_microbatches() == 0
 
                 # Forward pass.
-                if self.recompute_granularity == 'full':
+                if mpu.get_recomputation_level() == 'full':
                     hidden_states = self._checkpointed_forward(hidden_states,
                                                                attention_mask,
                                                                encoder_output,
@@ -1195,7 +1204,7 @@ class ParallelTransformer(MegatronModule):
 
                     if self.transformer_impl == 'transformer_engine':
                         forward_kwargs['is_first_microbatch'] = is_first_microbatch
-                        forward_kwargs['checkpoint_core_attention'] = self.checkpoint_core_attention
+                        forward_kwargs['checkpoint_core_attention'] = self._checkpoint_core_attention()
 
                     for index in range(self.num_layers):
                         layer = self._get_layer(index)

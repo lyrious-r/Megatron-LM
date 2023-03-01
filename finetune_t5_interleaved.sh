@@ -57,6 +57,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --pipeline-model-parallel-split-rank 2 \
        --dataloader-type ordered \
        --num-layers-per-virtual-pipeline-stage 1 \
+       --recompute-method uniform \
        --use-plopt \
        --plopt-cost-model /root/t5_11b_cm.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \

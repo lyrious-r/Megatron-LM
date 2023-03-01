@@ -60,6 +60,9 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
             print('> setting random seeds to {} ...'.format(args.seed))
         _set_random_seed(args.seed, args.data_parallel_random_init)
 
+    # set recompute granularity
+    mpu.set_recomputation_level(args.recompute_granularity)
+
     args = get_args()
     if  args.lazy_mpu_init:
         # TODO is this still a necessary option?
