@@ -132,9 +132,14 @@ def forward_step(forward_step_func,
     # If T5 model (or other model with encoder and decoder)
     # and in decoder stack, then send encoder_hidden_state
     # downstream as well.
-    if mpu.is_pipeline_stage_after_split() and \
-            args.model_type == ModelType.encoder_and_decoder:
-        return [output_tensor, input_tensor[-1]]
+    if args.model_type == ModelType.encoder_and_decoder:
+        if args.virtual_pipeline_model_parallel_size is not None:
+            if mpu.get_virtual_pipeline_model_parallel_rank() >= \
+                    args.virtual_pipeline_model_parallel_size // 2:
+                return [output_tensor, input_tensor[-1]]
+        else:
+            if mpu.is_pipeline_stage_after_split():
+                return [output_tensor, input_tensor[-1]]
     if unwrap_output_tensor:
         return output_tensor
     return [output_tensor]
@@ -190,10 +195,16 @@ def backward_step(optimizer, input_tensor, output_tensor,
     # Handle single skip connection if it exists (encoder_hidden_state in
     # model with encoder and decoder).
     if mpu.get_pipeline_model_parallel_world_size() > 1 and \
-            mpu.is_pipeline_stage_after_split() and \
             args.model_type == ModelType.encoder_and_decoder:
-        if output_tensor_grad[1] is not None:
-            input_tensor_grad[-1].add_(output_tensor_grad[1])
+        if args.virtual_pipeline_model_parallel_size is not None:
+            if mpu.get_virtual_pipeline_model_parallel_rank() >= \
+                    args.virtual_pipeline_model_parallel_size // 2:
+                if output_tensor_grad[1] is not None:
+                    input_tensor_grad[-1].add_(output_tensor_grad[1])
+        else:
+            if mpu.is_pipeline_stage_after_split():
+                if output_tensor_grad[1] is not None:
+                    input_tensor_grad[-1].add_(output_tensor_grad[1])
     if unwrap_input_tensor_grad:
         input_tensor_grad = input_tensor_grad[0]
 

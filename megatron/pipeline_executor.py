@@ -106,7 +106,8 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
 
             if not isinstance(outputs, list):
                 outputs = [outputs]
-            assert len(outputs) <= len(buffer_ids), "Number of outputs is greater than number of buffers"
+            assert len(outputs) <= len(buffer_ids), "On rank {}, number of outputs is greater than number of buffers ({} v.s. {}) when executing instruction: {}" \
+                .format(exec.execution_plan.rank, len(outputs), len(buffer_ids), instr)
             # output may not use all the buffers
             # we only fill the first len(outputs) buffers
             for buffer_id, output in zip(buffer_ids[:len(outputs)], outputs):
