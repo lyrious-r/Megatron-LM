@@ -87,6 +87,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
                                         dataset.constructor_fn,
                                         virtual_rank=virtual_pp_rank,
                                         n_virtual_ranks=n_virtual_pp_ranks,
+                                        limit_rc_type=args.plopt_limit_rc_type,
                                         batch_sampler=batch_sampler,
                                         num_workers=buffer_size,
                                         pin_memory=True)

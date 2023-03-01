@@ -21,8 +21,8 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
-       --encoder-num-layers 6 \
-       --decoder-num-layers 6 \
+       --encoder-num-layers 4 \
+       --decoder-num-layers 4 \
        --hidden-size 1024 \
        --num-attention-heads 128 \
        --kv-channels 128 \
@@ -56,14 +56,16 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --num-workers 2 \
        --pipeline-model-parallel-split-rank 2 \
        --dataloader-type ordered \
+       --recompute-method uniform \
        --use-plopt \
        --plopt-cost-model /root/t5_11b_cm.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \
        --plopt-device-memory-limit 40000 \
        --plopt-intra-node-bw 4800 \
        --plopt-inter-node-bw 100 \
-       --plopt-layer-to-device 0,0,0,1,1,1,2,2,2,3,3,3 \
+       --plopt-layer-to-device 0,0,1,1,2,2,3,3 \
        --dynamic-batchsize \
        --tokens-per-global-batch 16384 \
        --plopt-prefetch-planner-num-workers 128 \
-       2>&1 | tee log_t5_plopt_finetune.txt
+       --plopt-limit-rc-type none \
+       2>&1 | tee log_t5_plopt_finetune_linear.txt

@@ -6,6 +6,7 @@ import argparse
 import os
 
 import torch
+from plopt.pipe.instructions import get_available_rc_types
 
 def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     """Parse all arguments."""
@@ -402,6 +403,14 @@ def validate_args(args, defaults={}):
             local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 8))
             args.plopt_prefetch_planner_num_workers = max(1, os.cpu_count() / 2 -
                 2 * args.plopt_prefetch_listener_num_workers * (local_world_size - 1))
+
+        # parse rc type
+        if args.plopt_limit_rc_type is not None:
+            rc_types = args.plopt_limit_rc_type.split(",")
+            for rc_type in rc_types:
+                assert rc_type in get_available_rc_types(), \
+                    "Invalid value in plopt-limit-rc-type: {}".format(rc_type)
+            args.plopt_limit_rc_type = rc_types
 
     _print_args(args)
     return args
@@ -1217,5 +1226,9 @@ def _add_plopt_args(parser):
     group.add_argument('--plopt-prefetch-listener-num-workers', type=int,
                         default=2, help='Number of listener workers to use. '
                                         'A small number should be enough.')
+    group.add_argument('--plopt-limit-rc-type', type=str,
+                        help='Limit the type of recomputation to consider.'
+                             'Can be a single type or a comma-separated list.'
+                             'Supported types: \"none\", \"full\", \"selective\".')
     return parser
 
