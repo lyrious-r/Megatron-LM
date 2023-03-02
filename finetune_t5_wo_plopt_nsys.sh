@@ -27,7 +27,7 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --ffn-hidden-size 65536 \
        --encoder-seq-length 1024 \
        --decoder-seq-length 1024 \
-       --micro-batch-size 4 \
+       --micro-batch-size 2 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \

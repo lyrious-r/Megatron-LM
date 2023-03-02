@@ -81,7 +81,12 @@ def get_batch(data_iterator):
         data = next(data_iterator)
     else:
         data = None
-    data_b = tensor_parallel.broadcast_data(keys, data, datatype)
+    if get_args().tensor_model_parallel_size > 1:
+        data_b = tensor_parallel.broadcast_data(keys, data, datatype)
+    else:
+        data_b = {}
+        for key, value in data.items():
+            data_b[key] = value.cuda(non_blocking=True)
 
     # Unpack.
     tokens_enc = data_b['text_enc'].long()

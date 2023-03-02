@@ -316,6 +316,12 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
     num_microbatches_remaining = \
         num_microbatches - num_warmup_microbatches
 
+    def _annotate_microbatch(microbatch_id, chunk_id, is_forward=True):
+        if is_forward:
+            return torch.cuda.nvtx.range("Forward Microbatch {} Chunk {}".format(microbatch_id, chunk_id))
+        else:
+            return torch.cuda.nvtx.range("Backward Microbatch {} Chunk {}".format(microbatch_id, chunk_id))
+
     def get_model_chunk_id(microbatch_id, forward):
         """Helper method to get the model chunk ID given the iteration number."""
         microbatch_id_in_group = microbatch_id % (pipeline_parallel_size * num_model_chunks)
@@ -337,13 +343,14 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                     len(output_tensors[model_chunk_id]):
                 input_tensors[model_chunk_id].append(None)
         input_tensor = input_tensors[model_chunk_id][-1]
-        output_tensor = forward_step(forward_step_func,
-                                     data_iterator[model_chunk_id],
-                                     model[model_chunk_id],
-                                     input_tensor, 
-                                     forward_data_store,
-                                     timers,
-                                     collect_non_loss_data)
+        with _annotate_microbatch(microbatch_id, model_chunk_id, is_forward=True):
+            output_tensor = forward_step(forward_step_func,
+                                        data_iterator[model_chunk_id],
+                                        model[model_chunk_id],
+                                        input_tensor, 
+                                        forward_data_store,
+                                        timers,
+                                        collect_non_loss_data)
         output_tensors[model_chunk_id].append(output_tensor)
 
         # if forward-only, no need to save tensors for a backward pass
@@ -366,12 +373,13 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
         input_tensor = input_tensors[model_chunk_id].pop(0)
         output_tensor = output_tensors[model_chunk_id].pop(0)
         output_tensor_grad = output_tensor_grads[model_chunk_id].pop(0)
-        input_tensor_grad = \
-            backward_step(optimizer,
-                          input_tensor,
-                          output_tensor,
-                          output_tensor_grad,
-                          timers)
+        with _annotate_microbatch(microbatch_id, model_chunk_id, is_forward=False):
+            input_tensor_grad = \
+                backward_step(optimizer,
+                            input_tensor,
+                            output_tensor,
+                            output_tensor_grad,
+                            timers)
 
         return input_tensor_grad
 
@@ -666,11 +674,14 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             return torch.cuda.nvtx.range("Backward Microbatch {} {}".format(current_bw_mb, stage))
     # Run warmup forward passes.
     for i in range(num_warmup_microbatches):
-        input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
-        output_tensor = forward_step(forward_step_func, data_iterator, model,
-                                     input_tensor, forward_data_store,
-                                     timers, collect_non_loss_data)
-        send_forward(output_tensor, send_tensor_shapes, timers=timers)
+        with _annotate_microbatch("recv"):
+            input_tensor = recv_forward(recv_tensor_shapes, timers=timers)
+        with _annotate_microbatch("compute"):
+            output_tensor = forward_step(forward_step_func, data_iterator, model,
+                                        input_tensor, forward_data_store,
+                                        timers, collect_non_loss_data)
+        with _annotate_microbatch("send"):
+            send_forward(output_tensor, send_tensor_shapes, timers=timers)
 
         if not forward_only:
             input_tensors.append(input_tensor)
@@ -688,9 +699,10 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
     for i in range(num_microbatches_remaining):
         last_iteration = (i == (num_microbatches_remaining - 1))
 
-        output_tensor = forward_step(forward_step_func, data_iterator, model,
-                                     input_tensor, forward_data_store,
-                                     timers, collect_non_loss_data)
+        with _annotate_microbatch("compute"):
+            output_tensor = forward_step(forward_step_func, data_iterator, model,
+                                        input_tensor, forward_data_store,
+                                        timers, collect_non_loss_data)
         if forward_only:
             with _annotate_microbatch("send"):
                 send_forward(output_tensor, send_tensor_shapes, timers=timers)
@@ -716,9 +728,10 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             input_tensor = input_tensors.pop(0)
             output_tensor = output_tensors.pop(0)
 
-            input_tensor_grad = \
-                backward_step(optimizer, input_tensor, output_tensor,
-                              output_tensor_grad, timers)
+            with _annotate_microbatch("compute", is_forward=False):
+                input_tensor_grad = \
+                    backward_step(optimizer, input_tensor, output_tensor,
+                                output_tensor_grad, timers)
 
             if last_iteration:
                 input_tensor = None
@@ -739,10 +752,12 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             with _annotate_microbatch("recv", is_forward=False):
                 output_tensor_grad = recv_backward(send_tensor_shapes, timers=timers)
 
-            input_tensor_grad = \
-                backward_step(optimizer, input_tensor, output_tensor,
-                              output_tensor_grad, timers)
+            with _annotate_microbatch("compute", is_forward=False):
+                input_tensor_grad = \
+                    backward_step(optimizer, input_tensor, output_tensor,
+                                output_tensor_grad, timers)
 
-            send_backward(input_tensor_grad, recv_tensor_shapes, timers=timers)
+            with _annotate_microbatch("send", is_forward=False):
+                send_backward(input_tensor_grad, recv_tensor_shapes, timers=timers)
 
     return forward_data_store
