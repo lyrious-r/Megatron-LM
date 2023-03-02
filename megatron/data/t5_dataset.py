@@ -7,7 +7,7 @@ import collections
 import numpy as np
 import torch
 
-from megatron import get_tokenizer
+from megatron import get_tokenizer, get_args
 from megatron.data.dataset_utils import (
     create_masked_lm_predictions,
     get_samples_mapping,
@@ -248,11 +248,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.seed = seed
         self.sorted = sort_samples
         self.packed = pack_samples
-        if self.packed and not pad_samples:
-            print(' > WARNING: '
-                  "Packed samples must be padded. Ignoring pad_samples."
-                 )
-        self.padded = pack_samples
+        self.padded = pad_samples
         self.supervised = True
         self.ordered = True
         self.max_seq_length = max_seq_length
@@ -357,6 +353,12 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                 if idx != len(tensors) - 1:
                     tensors_to_cat.append(torch.tensor([self.sep_id]))
             tensors_to_cat = torch.cat(tensors_to_cat)
+        elif isinstance(tensors[0], np.ndarray):
+            for idx, tensor in enumerate(tensors):
+                tensors_to_cat.append(tensor)
+                if idx != len(tensors) - 1:
+                    tensors_to_cat.append(np.array([self.sep_id]))
+            tensors_to_cat = np.concatenate(tensors_to_cat)
         else:
             raise ValueError("Unsupported type in pack_fn: {}".format(type(tensors[0])))
         # currently do not return packing masks
@@ -379,59 +381,31 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             self.sentinel_tokens,
         )
 
-    def dynamic_batching_collate_fn(self, batch):
-        # pad to max length in batch
+    def non_plopt_collate_fn(self, batch):
+        # pad to max sequence length
         from torch.utils.data import default_collate
-        _debug = False
-
-        max_enc_len = max([len(s["text_enc"]) for s in batch])
-        max_dec_len = max([len(s["text_dec"]) for s in batch])
-        if _debug:
-            print_rank_0("=" * 80)
-            print_rank_0("Sample sequence lengths:")
-            input_padded_seqlen, target_padded_seqlen = max_enc_len, max_dec_len
-            total_input_tokens = 0
-            total_target_tokens = 0
-            for i, sequence in enumerate(batch):
-                print_rank_0(
-                    "    Sequence {} packed input seqlen: {}, target seqlen: {}".format(
-                        i, input_padded_seqlen, target_padded_seqlen
-                    )
-                )
-                print_rank_0(
-                    "    Sequence {} input: {}".format(
-                        i, [len(s["text_enc"]) for s in sequence]
-                    )
-                )
-                print_rank_0(
-                    "    Sequence {} target: {}".format(
-                        i, [len(s["text_dec"]) for s in sequence]
-                    )
-                )
-                total_input_tokens += sum([len(s["text_enc"]) for s in sequence])
-                total_target_tokens += sum([len(s["text_dec"]) for s in sequence])
-                print_rank_0("-" * 80)
-            input_padding_eff = total_input_tokens / (input_padded_seqlen * len(batch))
-            target_padding_eff = total_target_tokens / (target_padded_seqlen * len(batch))
-            print_rank_0(
-                "Current input padding efficiency: {:.2f}, target padding efficiency: {:.2f}".format(
-                    input_padding_eff, target_padding_eff
-                )
-            )
-        packed_samples = []
+        args = get_args()
+        result = []
+        micro_batch_size = args.micro_batch_size
+        current_micro_batch = []
+        assert len(batch) % micro_batch_size == 0, "batch size must be divisible by micro batch size"
         for sequence in batch:
-            packed_sample = build_supervised_training_sample(
+            padded_sequence = build_supervised_training_sample(
                 sequence["text_enc"],
                 sequence["text_dec"],
-                max_enc_len,
-                max_dec_len,
+                args.encoder_seq_length,
+                args.decoder_seq_length,
                 self.pad_id,
                 self.bos_id,
                 self.eos_id,
                 self.sentinel_tokens,
             )
-            packed_samples.append(packed_sample)
-        return default_collate(packed_samples)
+            current_micro_batch.append(padded_sequence)
+            if len(current_micro_batch) == micro_batch_size:
+                result.append(default_collate(current_micro_batch))
+                current_micro_batch = []
+        assert len(current_micro_batch) == 0, "micro batch size must be divisible by batch size"
+        return result
 
     def __getitem__(self, idx):
         if idx == -1:
@@ -469,6 +443,12 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                 self.sentinel_tokens,
             )
         else:
+            if self.packed:
+                # run pack fn on the samples
+                input_sample, _ = self.pack_fn(input_sample)
+                input_sample = [input_sample]
+                target_sample, _ = self.pack_fn(target_sample)
+                target_sample = [target_sample]
             return build_unpadded_sample(
                 input_sample, target_sample, self.max_seq_length, self.max_seq_length_dec
             )

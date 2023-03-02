@@ -449,13 +449,21 @@ def train_step(forward_step_func, data_iterator,
             partition.zero_grad_buffer()
     optimizer.zero_grad()
 
+    if args.dynamic_batchsize:
+        # the output of data iterator is a list of microbatches,
+        # we convert the list to another data iterator
+        data = next(data_iterator)
+        microbatch_iterator = iter(data)
+    else:
+        microbatch_iterator = data_iterator
+
     # Forward pass.
     timers('forward-backward', log_level=1).start(
         barrier=args.barrier_with_L1_time)
     forward_backward_func = get_forward_backward_func()
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
     losses_reduced = forward_backward_func(
-        forward_step_func, data_iterator, model,
+        forward_step_func, microbatch_iterator, model,
         optimizer, fwd_bwd_timers, forward_only=False)
     timers('forward-backward').stop()
 

@@ -17,7 +17,7 @@ export PLOPT_DEBUG=INFO
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
 
-python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown -s none -o nsys_t5_11b_l4_dynpipe_interleaved -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
@@ -69,4 +69,5 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --tokens-per-global-batch 16384 \
        --plopt-prefetch-planner-num-workers 128 \
        --plopt-limit-rc-type none \
+       --profile-with-nsys \
        2>&1 | tee log_t5_plopt_finetune_interleaved.txt

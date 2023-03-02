@@ -94,9 +94,9 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
         return joint_dataloader
 
     # Torch dataloader.
-    if isinstance(dataset, T5SupervisedDataset) and not dataset.padded:
+    if isinstance(dataset, T5SupervisedDataset) and args.dynamic_batchsize:
         # dynamic microbatching
-        collate_fn = dataset.dynamic_batching_collate_fn
+        collate_fn = dataset.non_plopt_collate_fn
     else:
         collate_fn = None
     return torch.utils.data.DataLoader(
@@ -305,6 +305,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         assert self._dynamic_batchsize
         current_batch_tokens = 0
         current_batch_end_idx = None
+        args = get_args()
         for idx in range(start_idx, end_idx):
             input_seq_len = min(
                 self.dataset.get_seq_len(idx), self.dataset.max_seq_length
@@ -316,11 +317,18 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             # here we count both input and target tokens
             # another option is to count only input tokens
             tokens_if_added = current_batch_tokens + input_seq_len + target_seq_len
+            # if not using plopt, each microbatch should have fixed shape
+            # so the number pf samples in a minibatch should be a multiple of
+            # microbatch size
+            is_microbatch_boundary = (
+                (idx - start_idx) % self.micro_batch_size == 0 if not args.use_plopt else True
+            )
             if (
                 # current batch is not empty
                 current_batch_tokens
                 # contains roughly _tokens_per_global_batch tokens
-                and tokens_if_added >= self._tokens_per_global_batch
+                and tokens_if_added > self._tokens_per_global_batch
+                and is_microbatch_boundary
             ):
                 # stop adding samples to current batch
                 current_batch_end_idx = idx

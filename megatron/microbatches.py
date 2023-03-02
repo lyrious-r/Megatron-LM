@@ -10,9 +10,19 @@ def build_num_microbatches_calculator(args):
 
     # Constant num micro-batches.
     if args.rampup_batch_size is None:
-        num_microbatches_calculator = ConstantNumMicroBatches(
-            args.global_batch_size, args.micro_batch_size,
-            args.data_parallel_size)
+        if args.dynamic_batchsize and not args.use_plopt:
+            seqlen_per_sample = args.encoder_seq_length + args.decoder_seq_length
+            num_samples = args.tokens_per_global_batch // seqlen_per_sample
+            while num_samples % args.micro_batch_size != 0:
+                num_samples += 1
+            num_microbatches = num_samples // args.micro_batch_size
+            num_microbatches_calculator = RawConstantNumMicroBatches(
+                num_microbatches
+            )
+        else:
+            num_microbatches_calculator = ConstantNumMicroBatches(
+                args.global_batch_size, args.micro_batch_size,
+                args.data_parallel_size)
         if args.rank == 0:
             print('setting number of micro-batches to constant {}'.format(
                 num_microbatches_calculator.get()), flush=True)
@@ -70,6 +80,14 @@ class ConstantNumMicroBatches(NumMicroBatchesCalculator):
                                  micro_batch_times_data_parallel
         assert self.num_micro_batches >= 1
         self.current_global_batch_size = global_batch_size
+
+    def update(self, consumed_samples, consistency_check):
+        pass
+
+class RawConstantNumMicroBatches(NumMicroBatchesCalculator):
+    def __init__(self, num_microbatches):
+        self.num_micro_batches = num_microbatches
+        self.current_global_batch_size = None
 
     def update(self, consumed_samples, consistency_check):
         pass
