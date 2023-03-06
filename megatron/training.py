@@ -35,6 +35,7 @@ from megatron.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.utils import check_adlr_autoresume_termination
 from megatron.utils import unwrap_model
+from megatron.utils import reserve_full_memory
 from megatron.data.data_samplers import build_pretraining_data_loader
 from megatron.utils import calc_params_l2_norm
 from megatron.schedules import get_forward_backward_func
@@ -856,6 +857,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     """Train the model function. Removed irrelavant code for testing."""
     args = get_args()
     timers = get_timers()
+    from plopt.utils.logger import logger
 
     # Turn on training mode which enables dropout.
     for model_module in model:
@@ -867,6 +869,12 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     # Iterations.
     orig_iteration = args.iteration
     iteration = args.iteration
+
+    if args.plopt_reserve_all_memory:
+        # Reserve all GPU memory upfront.
+        reserved_memory = reserve_full_memory()
+        logger.info("Reserved memory: {:.2f} GB".format(
+            reserved_memory / 1024.0 / 1024.0 / 1024.0))
 
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
@@ -891,6 +899,21 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             if iteration - orig_iteration == args.nsys_profile_warmup:
                 logger.warning("Cuda profiler started.")
                 torch.cuda.cudart().cudaProfilerStart()
+                # also start recording memory history
+                torch.cuda.memory._record_memory_history(True,
+                    # keep 100,000 alloc/free events from before the snapshot
+                    trace_alloc_max_entries=100000,
+                    # record stack information for the trace events
+                    trace_alloc_record_context=True)
+            if iteration - orig_iteration > args.nsys_profile_warmup and \
+                (iteration - orig_iteration - args.nsys_profile_warmup) < args.nsys_profile_steps:
+                rank = mpu.get_pipeline_model_parallel_rank()
+                if rank == 0:
+                    snapshot = torch.cuda.memory._snapshot()
+                    import pickle
+                    with open(f'snapshot_iter{iteration}.pickle', 'wb') as f:
+                        pickle.dump(snapshot, f)
+                # dump memory history
             if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
                 logger.warning("Cuda profiler stopped.")
                 torch.cuda.cudart().cudaProfilerStop()

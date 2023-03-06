@@ -17,7 +17,7 @@ export PLOPT_DEBUG=INFO
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
 
-nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:10000 --cuda-memory-usage true -o nsys_t5_11b_l4_dynpipe_linear_cuda_mem -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:10000 -o nsys_t5_11b_l4_dynpipe_linear_round128 -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
@@ -27,8 +27,8 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --num-attention-heads 128 \
        --kv-channels 128 \
        --ffn-hidden-size 65536 \
-       --encoder-seq-length 4096 \
-       --decoder-seq-length 4096 \
+       --encoder-seq-length 1024 \
+       --decoder-seq-length 1024 \
        --micro-batch-size 8 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
@@ -69,4 +69,5 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --plopt-prefetch-planner-num-workers 16 \
        --plopt-limit-rc-type none \
        --profile-with-nsys \
+       --plopt-reserve-all-memory \
        2>&1 | tee log_t5_plopt_finetune_linear.txt

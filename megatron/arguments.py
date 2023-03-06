@@ -1234,5 +1234,9 @@ def _add_plopt_args(parser):
                         help='Limit the type of recomputation to consider.'
                              'Can be a single type or a comma-separated list.'
                              'Supported types: \"none\", \"full\", \"selective\".')
+    group.add_argument('--plopt-round-seqlen-multiple', type=int, default=8,
+                        help='Round sequence length to a multiple of this value.')
+    group.add_argument('--plopt-reserve-all-memory', action='store_true',
+                        help='Reserve all memory before training starts.')
     return parser
 

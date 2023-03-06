@@ -211,3 +211,25 @@ def print_rank_last(message):
             print(message, flush=True)
     else:
         print(message, flush=True)
+
+def reserve_full_memory():
+    total_memory = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+    # try to allocate 80% of all memory
+    while True:
+        try:
+            t = torch.empty(total_memory, dtype=torch.uint8, device=torch.cuda.current_device())
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                total_memory -= 128 * 1024 * 1024 # 128MB
+                continue
+            else:
+                # not an OOM error
+                raise e
+        break
+    del t
+    # free the memory
+    torch.cuda.empty_cache()
+    # allocate again, but limit to 80% of the total memory available
+    total_memory = int(total_memory * 0.8)
+    t = torch.empty(total_memory, dtype=torch.uint8, device=torch.cuda.current_device())
+    return total_memory
