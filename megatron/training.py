@@ -560,11 +560,11 @@ def plopt_train_step(data_iterator, forward_step_func,
     timers('forward-backward').stop()
     
 
-    memory_dict = torch.cuda.memory_stats()
-    import json
-    with open("./memory_stats_plopt_{}.txt".format(mpu.get_pipeline_model_parallel_rank()), "a") as f:
-        f.write(json.dumps(memory_dict) + "\n")
-    torch.cuda.reset_peak_memory_stats()
+    # memory_dict = torch.cuda.memory_stats()
+    # import json
+    # with open("./memory_stats_plopt_{}.txt".format(mpu.get_pipeline_model_parallel_rank()), "a") as f:
+    #     f.write(json.dumps(memory_dict) + "\n")
+    # torch.cuda.reset_peak_memory_stats()
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
@@ -900,20 +900,17 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
                 logger.warning("Cuda profiler started.")
                 torch.cuda.cudart().cudaProfilerStart()
                 # also start recording memory history
-                torch.cuda.memory._record_memory_history(True,
-                    # keep 100,000 alloc/free events from before the snapshot
-                    trace_alloc_max_entries=100000,
-                    # record stack information for the trace events
-                    trace_alloc_record_context=True)
+                # torch.cuda.memory._record_memory_history(True)
             if iteration - orig_iteration > args.nsys_profile_warmup and \
                 (iteration - orig_iteration - args.nsys_profile_warmup) < args.nsys_profile_steps:
-                rank = mpu.get_pipeline_model_parallel_rank()
-                if rank == 0:
-                    snapshot = torch.cuda.memory._snapshot()
-                    import pickle
-                    with open(f'snapshot_iter{iteration}.pickle', 'wb') as f:
-                        pickle.dump(snapshot, f)
+                # rank = mpu.get_pipeline_model_parallel_rank()
+                # if rank == 0:
+                #     snapshot = torch.cuda.memory._snapshot()
+                #     import pickle
+                #     with open(f'snapshot_iter{iteration}.pickle', 'wb') as f:
+                #         pickle.dump(snapshot, f)
                 # dump memory history
+                pass
             if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
                 logger.warning("Cuda profiler stopped.")
                 torch.cuda.cudart().cudaProfilerStop()

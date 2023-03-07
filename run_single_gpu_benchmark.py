@@ -2,14 +2,15 @@ import argparse
 import subprocess
 
 MASTER_PORT = 8000
-DISTRIBUTED_ARGS = f"--nproc_per_node 1 --nnodes 1 --node_rank 0 --master_addr localhost --master_port {MASTER_PORT}"
+DISTRIBUTED_ARGS = "--nproc_per_node 1 --nnodes 1 --node_rank 0 --master_addr localhost --master_port {} --use-env"
 
 CMD_TEMPLATE = """
-python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        microbenchmark_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 1 \
-       --num-layers 1 \
+       --encoder-num-layers 1 \
+       --decoder-num-layers 1 \
        --hidden-size {} \
        --num-attention-heads {} \
        --kv-channels {} \
@@ -17,8 +18,9 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --encoder-seq-length {} \
        --decoder-seq-length {} \
        --micro-batch-size {} \
-       --global-batch-size 128 \
+       --global-batch-size 4096 \
        --max-position-embeddings 8192 \
+       --no-async-tensor-model-parallel-allreduce \
        --train-iters {} \
        --train-epochs 1 \
        --lr-decay-iters 100 \
@@ -39,7 +41,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
         --vocab-extra-ids 100 \
        --num-workers 2 \
        --dataloader-type ordered \
-       --preprocess-workers 512 \
+       --microbenchmark-save-dir {} \
        --tokens-per-global-batch 16384"""
 
 
@@ -80,6 +82,19 @@ def parse_args():
         default=50,
         help="Number of iterations to benchmark",
     )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        required=True,
+        help="Output directory for benchmark results",
+    )
+    parser.add_argument(
+        "--device",
+        type=int,
+        default=0,
+        help="GPU to run benchmark on.",
+    )
     # default model configuration corresponds to T5-11B
     parser.add_argument(
         "--hidden-size", type=int, default=1024, help="Model hidden size"
@@ -97,6 +112,7 @@ def parse_args():
         "--ffn-hidden-size", type=int, default=65536, help="FFN hidden size"
     )
 
+
     args = parser.parse_args()
     return args
 
@@ -105,6 +121,8 @@ def run_benchmark(
     enc_seqlen,
     dec_seqlen,
     microbatch_size,
+    output_dir,
+    device=0,
     benchmark_iters=50,
     hidden_size=1024,
     n_attn_heads=128,
@@ -112,7 +130,10 @@ def run_benchmark(
     ffn_hidden_size=65536,
     recompute_type="None",
 ):
+    distributed_args = DISTRIBUTED_ARGS.format(MASTER_PORT + device)
     cmd = CMD_TEMPLATE.format(
+        device,
+        distributed_args,
         hidden_size,
         n_attn_heads,
         kv_channels,
@@ -121,6 +142,7 @@ def run_benchmark(
         dec_seqlen,
         microbatch_size,
         benchmark_iters,
+        output_dir,
     )
     if recompute_type != "None":
         if recompute_type == "Selective":
@@ -139,6 +161,8 @@ if __name__ == "__main__":
         args.encoder_seq_length,
         args.decoder_seq_length,
         args.micro_batch_size,
+        args.output_dir,
+        args.device,
         args.benchmark_iters,
         args.hidden_size,
         args.num_attention_heads,

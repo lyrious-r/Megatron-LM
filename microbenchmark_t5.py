@@ -15,6 +15,7 @@
 
 """Microbenchmark T5 layers on a single GPU"""
 from functools import partial
+import os
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -23,10 +24,10 @@ from megatron import (
     get_args,
     get_num_microbatches,
     get_timers,
-    mpu,
     print_rank_0,
     update_num_microbatches,
 )
+from megatron.core import mpu
 from megatron.initialize import initialize_megatron, set_jit_fusion_options
 from megatron.model import ModelType, T5Model
 from megatron.optimizer import Float16OptimizerWithFloat16Params
@@ -34,20 +35,20 @@ from megatron.schedules import backward_step, forward_step
 from megatron.training import setup_model_and_optimizer
 from megatron.utils import average_losses_across_data_parallel_group
 
-WARMUP_ITERATIONS = 10
+WARMUP_ITERATIONS = 20
 timer_disabled = True
 
 
 def start_timer(timers, name):
     if timer_disabled:
         return
-    timers(name).start()
+    timers(name, log_level=0).start()
 
 
 def stop_timer(timers, name):
     if timer_disabled:
         return
-    timers(name).stop()
+    timers(name, log_level=0).stop()
 
 
 class StatRecorder:
@@ -258,6 +259,7 @@ def benchmark_forward_backward_no_pipelining(
         model,
         input_tensor,
         forward_data_store,
+        timers,
         collect_non_loss_data,
     )
     stop_timer(timers, "forward_decoder")
@@ -273,7 +275,7 @@ def benchmark_forward_backward_no_pipelining(
         start_timer(timers, "backward_decoder")
         # backward_decoder stop is called in the gradient hook
         backward_step(
-            optimizer, input_tensor, output_tensor, output_tensor_grad
+            optimizer, input_tensor, output_tensor, output_tensor_grad, timers
         )
         stop_timer(timers, "backward_total")
         memory_after_backward = torch.cuda.memory_allocated()
@@ -575,7 +577,10 @@ def microbenchmark(
     set_jit_fusion_options()
 
     args = get_args()
-    timers = get_timers()
+
+    assert args.microbenchmark_save_dir is not None, (
+        "Please specify a directory to save microbenchmark results"
+    )
 
     # Model, optimizer, and learning rate.
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
@@ -619,12 +624,10 @@ def microbenchmark(
     stat_recorder.add("optimizer_state_size", optimizer_state_size)
 
     # generate report
-    if args.microbenchmark_save_path is None:
-        # create a default one based on microbatchsize
-        args.microbenchmark_save_path = (
-            f"microbench_{get_microbenchmark_name()}.txt"
-        )
-    generate_report(iteration, args.microbenchmark_save_path)
+    microbenchmark_save_path = (
+        os.path.join(args.microbenchmark_save_dir, f"microbench_{get_microbenchmark_name()}.txt")
+    )
+    generate_report(iteration, microbenchmark_save_path)
 
 
 if __name__ == "__main__":

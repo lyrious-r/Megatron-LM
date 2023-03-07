@@ -766,7 +766,7 @@ def _add_training_args(parser):
                        help='Disable fusing gradient accumulation to weight '
                        'gradient computation of linear layers',
                        dest='gradient_accumulation_fusion')
-    group.add_argument('--microbenchmark-save-path', type=str, help='Path to save microbenchmark results')
+    group.add_argument('--microbenchmark-save-dir', type=str, help='Path to save microbenchmark results')
     return parser
 
 
