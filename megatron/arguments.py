@@ -767,6 +767,7 @@ def _add_training_args(parser):
                        'gradient computation of linear layers',
                        dest='gradient_accumulation_fusion')
     group.add_argument('--microbenchmark-save-dir', type=str, help='Path to save microbenchmark results')
+    group.add_argument('--skip-iters', type=int, default=0, help='Number of iterations to skip')
     return parser
 
 
@@ -954,6 +955,8 @@ def _add_distributed_args(parser):
                        help='Call torch.cuda.empty_cache() each iteration '
                        '(training and eval), to reduce fragmentation.'
                        '0=off, 1=moderate, 2=aggressive.')
+    group.add_argument('--empty-unused-memory-interval', default=400, type=int,
+                       help='Interval between calls to torch.cuda.empty_cache()')
     group.add_argument('--standalone-embedding-stage', action='store_true',
                        default=False, help='If set, *input* embedding layer '
                        'is placed on its own pipeline stage, without any '

@@ -468,11 +468,11 @@ def train_step(forward_step_func, data_iterator,
         optimizer, fwd_bwd_timers, forward_only=False)
     timers('forward-backward').stop()
 
-    memory_dict = torch.cuda.memory_stats()
-    import json
-    with open("./memory_stats_{}.txt".format(mpu.get_pipeline_model_parallel_rank()), "a") as f:
-        f.write(json.dumps(memory_dict) + "\n")
-    torch.cuda.reset_peak_memory_stats()
+    # memory_dict = torch.cuda.memory_stats()
+    # import json
+    # with open("./memory_stats_{}.txt".format(mpu.get_pipeline_model_parallel_rank()), "a") as f:
+    #     f.write(json.dumps(memory_dict) + "\n")
+    # torch.cuda.reset_peak_memory_stats()
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
@@ -894,6 +894,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             # run out of data
             break
         iteration += 1
+        if args.empty_unused_memory_interval > 0 and \
+                iteration % args.empty_unused_memory_interval == 0:
+            # Empty unused memory.
+            torch.cuda.empty_cache()
         if args.profile_with_nsys:
             from plopt.utils.logger import logger
             if iteration - orig_iteration == args.nsys_profile_warmup:

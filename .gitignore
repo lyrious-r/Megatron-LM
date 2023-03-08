@@ -18,3 +18,4 @@ megatron/fused_kernels/build/
 build
 .coverage_*
 *.egg-info
+/*.pkl

@@ -52,6 +52,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             data_sharding=args.data_sharding,
             dynamic_batchsize=args.dynamic_batchsize,
             tokens_per_global_batch=args.tokens_per_global_batch,
+            is_training=is_training,
         )
     else:
         raise Exception('{} dataloader type is not supported.'.format(
@@ -263,6 +264,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         micro_batch_size=None,
         dynamic_batchsize=False,
         tokens_per_global_batch=None,
+        is_training=True,
     ):
         super().__init__(
             dataset,
@@ -301,12 +303,25 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 )
             self._tokens_per_global_batch = tokens_per_global_batch
         self._is_supervised_dataset = isinstance(dataset, T5SupervisedDataset)
+        # handle skip iters
+        self.args = get_args()
+        if self.args.skip_iters > 0 and is_training:
+            current_epoch_samples, _ = self._calc_sample_offsets()
+            start_idx = current_epoch_samples
+            for _ in range(self.args.skip_iters):
+                if self._dynamic_batchsize:
+                    # assume dataset is pre_divided among data parallel groups
+                    next_batch_end_idx = self._get_next_batch(start_idx, self.total_samples)
+                    assert next_batch_end_idx > start_idx
+                    batch = list(range(start_idx, next_batch_end_idx))
+                    self.consumed_samples += len(batch)
+                    start_idx = next_batch_end_idx
 
     def _get_next_batch(self, start_idx, end_idx):
         assert self._dynamic_batchsize
         current_batch_tokens = 0
         current_batch_end_idx = None
-        args = get_args()
+
         for idx in range(start_idx, end_idx):
             input_seq_len = min(
                 self.dataset.get_seq_len(idx), self.dataset.max_seq_length
@@ -322,7 +337,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             # so the number pf samples in a minibatch should be a multiple of
             # microbatch size
             is_microbatch_boundary = (
-                (idx - start_idx) % self.micro_batch_size == 0 if not args.use_plopt else True
+                (idx - start_idx) % self.micro_batch_size == 0 if not self.args.use_plopt else True
             )
             if (
                 # current batch is not empty
@@ -346,7 +361,8 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             self.dataset.set_epoch(self.epoch)
         current_epoch_samples = self.consumed_samples % active_total_samples
         epoch = self.epoch
-        assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
+        if not self._dynamic_batchsize:
+            assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
         if not self.data_sharding:
             print_rank_0(
                 "WARNING: data sharding must be enabled for sorted sampler. Ignoring setting."

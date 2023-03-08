@@ -15,25 +15,25 @@ CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
 export PLOPT_DEBUG=INFO
 
-DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
+DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use-env"
 
 python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
-       --encoder-num-layers 4 \
-       --decoder-num-layers 4 \
+       --encoder-num-layers 12 \
+       --decoder-num-layers 12 \
        --hidden-size 1024 \
-       --num-attention-heads 128 \
+       --num-attention-heads 32 \
        --kv-channels 128 \
-       --ffn-hidden-size 65536 \
-       --encoder-seq-length 4096 \
-       --decoder-seq-length 4096 \
+       --ffn-hidden-size 16384 \
+       --encoder-seq-length 1024 \
+       --decoder-seq-length 1024 \
        --micro-batch-size 8 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
-       --train-iters 1000 \
+       --train-iters 1000000 \
        --train-epochs 1 \
        --lr-decay-iters 100 \
        --data-path $DATA_PATH \
@@ -58,14 +58,15 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --dataloader-type ordered \
        --recompute-method uniform \
        --use-plopt \
-       --plopt-cost-model /root/t5_11b_cm.pkl \
+       --plopt-cost-model /root/Megatron-LM/t5_3b_torch210.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \
-       --plopt-device-memory-limit 40000 \
+       --plopt-device-memory-limit 35000 \
        --plopt-intra-node-bw 4800 \
        --plopt-inter-node-bw 100 \
-       --plopt-layer-to-device 0,0,1,1,2,2,3,3 \
+       --plopt-layer-to-device 0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,3,3,3,3,3,3 \
        --dynamic-batchsize \
        --tokens-per-global-batch 16384 \
-       --plopt-prefetch-planner-num-workers 128 \
-       --plopt-limit-rc-type none \
-       2>&1 | tee log_t5_plopt_finetune_linear.txt
+       --plopt-prefetch-planner-num-workers 16 \
+       --plopt-reserve-all-memory \
+       --skip-iters 430 \
+       2>&1 | tee log_t5_3b_12l_plopt_linear.txt
