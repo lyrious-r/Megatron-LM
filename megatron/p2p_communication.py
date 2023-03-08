@@ -99,7 +99,7 @@ def _communicate_shapes(tensor_send_next, tensor_send_prev,
 
 
 def _communicate(tensor_send_next, tensor_send_prev, recv_prev, recv_next,
-                 tensor_shape,
+                 tensor_shape, recv_prev_shape=None, recv_next_shape=None,
                  dtype_=None):
     """Communicate tensors between stages. Used as helper method in other
     communication methods that are used in megatron/schedules.py.
@@ -128,22 +128,23 @@ def _communicate(tensor_send_next, tensor_send_prev, recv_prev, recv_next,
     tensor_recv_prev = None
     tensor_recv_next = None
 
-    # Some legacy inference code doesn't set the tensor shape, do so now
-    # for the normal values for gpt/bert. This could be removed if inference
-    # code is changed to provide tensor_shape.
-    if not args.variable_seq_lengths:
-        if tensor_shape is None:
-            recv_prev_shape = (args.seq_length, args.micro_batch_size, args.hidden_size)
-            recv_next_shape = (args.seq_length, args.micro_batch_size, args.hidden_size)
+    if recv_prev_shape is None and recv_next_shape is None:
+        # Some legacy inference code doesn't set the tensor shape, do so now
+        # for the normal values for gpt/bert. This could be removed if inference
+        # code is changed to provide tensor_shape.
+        if not args.variable_seq_lengths:
+            if tensor_shape is None:
+                recv_prev_shape = (args.seq_length, args.micro_batch_size, args.hidden_size)
+                recv_next_shape = (args.seq_length, args.micro_batch_size, args.hidden_size)
+            else:
+                recv_prev_shape = tensor_shape
+                recv_next_shape = tensor_shape
         else:
-            recv_prev_shape = tensor_shape
-            recv_next_shape = tensor_shape
-    else:
-        recv_prev_shape, recv_next_shape = \
-            _communicate_shapes(tensor_send_next,
-                                tensor_send_prev,
-                                recv_prev,
-                                recv_next)
+            recv_prev_shape, recv_next_shape = \
+                _communicate_shapes(tensor_send_next,
+                                    tensor_send_prev,
+                                    recv_prev,
+                                    recv_next)
 
     override_scatter_gather_tensors_in_pipeline = False
     if args.scatter_gather_tensors_in_pipeline and \
@@ -389,7 +390,8 @@ def send_backward_recv_backward(input_tensor_grad, recv_next, tensor_shape=None,
 
 def send_forward_backward_recv_forward_backward(
         output_tensor, input_tensor_grad, recv_prev,
-        recv_next, tensor_shape=None, timers=None):
+        recv_next, tensor_shape=None, receive_prev_shape=None,
+        receive_next_shape=None, timers=None):
     """Batched send and recv with previous and next ranks in pipeline."""
     if timers is not None:
         timers('forward-backward-send-forward-backward-recv',
@@ -399,7 +401,9 @@ def send_forward_backward_recv_forward_backward(
         tensor_send_prev=input_tensor_grad,
         recv_prev=recv_prev,
         recv_next=recv_next,
-        tensor_shape=tensor_shape)
+        tensor_shape=tensor_shape,
+        receive_prev_shape=receive_prev_shape,
+        receive_next_shape=receive_next_shape)
     if timers is not None:
         timers('forward-backward-send-forward-backward-recv').stop()
     return input_tensor, output_tensor_grad

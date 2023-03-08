@@ -1226,6 +1226,11 @@ def _add_plopt_args(parser):
     group.add_argument('--plopt-layer-to-device', type=str,
                         help='Mapping between layer ranks to devices.'
                              'A list of ints.')
+    group.add_argument('--plopt-enable-packing', action='store_true',
+                        help='Enable packing in plopt.')
+    group.add_argument('--plopt-per-mb-mem-fraction', type=float,
+                       default=0.5, help='Fraction of memory limit to use per '
+                        'micro-batch during DP.')
     group.add_argument('--plopt-prefetch-planner-num-workers', type=int,
                         help='Number of planner workers to use. '
                              'Suggest to use larger numbers to better '

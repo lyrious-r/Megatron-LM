@@ -29,7 +29,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --ffn-hidden-size 16384 \
        --encoder-seq-length 1024 \
        --decoder-seq-length 1024 \
-       --micro-batch-size 8 \
+       --micro-batch-size 2 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
@@ -58,16 +58,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --dataloader-type ordered \
        --num-layers-per-virtual-pipeline-stage 3 \
        --recompute-method uniform \
-       --use-plopt \
-       --plopt-cost-model /root/Megatron-LM/t5_3b_torch210.pkl \
-       --plopt-device-to-node 0:0,1:0,2:0,3:0 \
-       --plopt-device-memory-limit 35000 \
-       --plopt-intra-node-bw 4800 \
-       --plopt-inter-node-bw 100 \
-       --plopt-layer-to-device 0,0,0,1,1,1,2,2,2,3,3,3,0,0,0,1,1,1,2,2,2,3,3,3 \
        --dynamic-batchsize \
        --tokens-per-global-batch 16384 \
-       --plopt-prefetch-planner-num-workers 128 \
-       --plopt-reserve-all-memory \
-       --plopt-enable-packing \
-       2>&1 | tee log_t5_3b_12l_plopt_interleaved_gbs16384_packed.txt
+       --pack-dataset \
+       2>&1 | tee log_t5_3b_12l_mlm_interleaved_gbs16384_mbs2.txt

@@ -453,8 +453,15 @@ def train_step(forward_step_func, data_iterator,
     if args.dynamic_batchsize:
         # the output of data iterator is a list of microbatches,
         # we convert the list to another data iterator
-        data = next(data_iterator)
-        microbatch_iterator = iter(data)
+        if isinstance(data_iterator, list):
+            new_iterators = []
+            for iterator in data_iterator:
+                data = next(iterator)
+                new_iterators.append(iter(data))
+            microbatch_iterator = new_iterators
+        else:
+            data = next(data_iterator)
+            microbatch_iterator = iter(data)
     else:
         microbatch_iterator = data_iterator
 
@@ -879,7 +886,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
     report_memory_flag = True
+    rank = mpu.get_pipeline_model_parallel_rank()
     while iteration < args.train_iters:
+        if rank == 0:
+            logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
@@ -897,6 +907,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
         if args.empty_unused_memory_interval > 0 and \
                 iteration % args.empty_unused_memory_interval == 0:
             # Empty unused memory.
+            logger.info("Emptying cuda cache...")
             torch.cuda.empty_cache()
         if args.profile_with_nsys:
             from plopt.utils.logger import logger

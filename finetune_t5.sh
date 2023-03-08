@@ -33,7 +33,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
-       --train-iters 1000000 \
+       --train-iters 470 \
        --train-epochs 1 \
        --lr-decay-iters 100 \
        --data-path $DATA_PATH \
@@ -47,7 +47,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --lr-warmup-fraction .01 \
        --weight-decay 1e-2 \
        --clip-grad 1.0 \
-       --log-interval 50 \
+       --log-interval 20 \
        --save-interval 10000 \
        --eval-interval 1000 \
        --eval-iters 5 \
@@ -60,13 +60,14 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --use-plopt \
        --plopt-cost-model /root/Megatron-LM/t5_3b_torch210.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \
-       --plopt-device-memory-limit 35000 \
+       --plopt-device-memory-limit 30000 \
        --plopt-intra-node-bw 4800 \
        --plopt-inter-node-bw 100 \
        --plopt-layer-to-device 0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,3,3,3,3,3,3 \
        --dynamic-batchsize \
-       --tokens-per-global-batch 16384 \
-       --plopt-prefetch-planner-num-workers 16 \
+       --tokens-per-global-batch 65536 \
+       --plopt-prefetch-planner-num-workers 128 \
        --plopt-reserve-all-memory \
-       --skip-iters 430 \
-       2>&1 | tee log_t5_3b_12l_plopt_linear.txt
+       --plopt-per-mb-mem-fraction 0.25 \
+       --plopt-enable-packing \
+       2>&1 | tee log_t5_3b_12l_plopt_linear_gbs65536_packed.txt
