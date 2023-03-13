@@ -19,3 +19,4 @@ build
 .coverage_*
 *.egg-info
 /*.pkl
+plopt_debug*/*

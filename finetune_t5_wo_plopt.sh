@@ -19,19 +19,19 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
-       --encoder-num-layers 12 \
-       --decoder-num-layers 12 \
+       --encoder-num-layers 6 \
+       --decoder-num-layers 6 \
        --hidden-size 1024 \
-       --num-attention-heads 32 \
+       --num-attention-heads 128 \
        --kv-channels 128 \
-       --ffn-hidden-size 16384 \
+       --ffn-hidden-size 65536 \
        --encoder-seq-length 1024 \
        --decoder-seq-length 1024 \
        --micro-batch-size 1 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
-       --train-iters 255 \
+       --train-iters 250 \
        --train-epochs 1 \
        --lr-decay-iters 100 \
        --data-path $DATA_PATH \
@@ -56,6 +56,6 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --dataloader-type ordered \
        --recompute-method uniform \
        --dynamic-batchsize \
-       --tokens-per-global-batch 65536 \
+       --tokens-per-global-batch 16384 \
        --pack-dataset \
-       2>&1 | tee log_t5_mlm_linear_gbs65536_mbs1.txt
+       2>&1 | tee log_t5_11b_6l_mlm_linear_gbs16384_mbs1.txt

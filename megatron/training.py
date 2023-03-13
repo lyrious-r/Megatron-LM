@@ -45,6 +45,8 @@ from megatron.data.t5_dataset import T5UnsupervisedDataset
 
 from .pipeline_executor import get_pipeline_executor
 
+DEBUG_DUMP_MEMORY_STATS = True
+
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
     torch.distributed.barrier()
@@ -565,13 +567,7 @@ def plopt_train_step(data_iterator, forward_step_func,
     executor = get_pipeline_executor(forward_step_func, microbatch_iterator, model, optimizer)
     executor.execute(execution_plan)
     timers('forward-backward').stop()
-    
 
-    # memory_dict = torch.cuda.memory_stats()
-    # import json
-    # with open("./memory_stats_plopt_{}.txt".format(mpu.get_pipeline_model_parallel_rank()), "a") as f:
-    #     f.write(json.dumps(memory_dict) + "\n")
-    # torch.cuda.reset_peak_memory_stats()
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
@@ -859,6 +855,32 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler):
     timers('save-checkpoint').stop(barrier=True)
     timers.log(['save-checkpoint'])
 
+def get_resident_tensors():
+    import gc
+    tensors = set()
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj):
+                tensors.add(obj)
+            elif (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                tensors.add(obj.data)
+        except:
+            pass
+    return tensors
+
+def get_resident_tensor_size():
+    import gc
+    total_size = 0
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj):
+                total_size += obj.numel() * obj.element_size()
+            elif (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                total_size += obj.data.numel() * obj.data.element_size()
+        except:
+            pass
+    return total_size
+
 def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator):
     """Train the model function. Removed irrelavant code for testing."""
@@ -887,6 +909,9 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     print_datetime('before the start of training step')
     report_memory_flag = True
     rank = mpu.get_pipeline_model_parallel_rank()
+
+    if DEBUG_DUMP_MEMORY_STATS:
+        torch.cuda.memory._record_memory_history(True)
     while iteration < args.train_iters:
         if rank == 0:
             logger.info("Running iteration {}...".format(iteration))
@@ -909,23 +934,32 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             # Empty unused memory.
             logger.info("Emptying cuda cache...")
             torch.cuda.empty_cache()
+        if DEBUG_DUMP_MEMORY_STATS:
+            torch.cuda.synchronize()
+            snapshot = torch.cuda.memory._snapshot()
+            import pickle
+            import json
+            import os
+            if not os.path.exists('./memory_debug/memory_snapshots/rank_{}'.format(rank)):
+                os.makedirs('./memory_debug/memory_snapshots/rank_{}'.format(rank))
+            with open(f'./memory_debug/memory_snapshots/rank_{rank}/snapshot_iter{iteration}.pickle', 'wb') as f:
+                pickle.dump(snapshot, f)
+            # get some stats
+            resident_tensor_size = get_resident_tensor_size()
+            with open(f'./memory_debug/memory_snapshots/rank_{rank}/stats_iter{iteration}.txt', 'w') as f:
+                data= {
+                    "resident_tensor_size": resident_tensor_size,
+                    "memory_stats": torch.cuda.memory_stats(),
+                }
+                json.dump(data, f)
+            # reset peak
+            torch.cuda.memory.reset_peak_memory_stats()
+            torch.cuda.memory.reset_accumulated_memory_stats()
         if args.profile_with_nsys:
             from plopt.utils.logger import logger
             if iteration - orig_iteration == args.nsys_profile_warmup:
                 logger.warning("Cuda profiler started.")
                 torch.cuda.cudart().cudaProfilerStart()
-                # also start recording memory history
-                # torch.cuda.memory._record_memory_history(True)
-            if iteration - orig_iteration > args.nsys_profile_warmup and \
-                (iteration - orig_iteration - args.nsys_profile_warmup) < args.nsys_profile_steps:
-                # rank = mpu.get_pipeline_model_parallel_rank()
-                # if rank == 0:
-                #     snapshot = torch.cuda.memory._snapshot()
-                #     import pickle
-                #     with open(f'snapshot_iter{iteration}.pickle', 'wb') as f:
-                #         pickle.dump(snapshot, f)
-                # dump memory history
-                pass
             if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
                 logger.warning("Cuda profiler stopped.")
                 torch.cuda.cudart().cudaProfilerStop()

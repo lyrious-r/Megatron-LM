@@ -153,17 +153,23 @@ def _create_backward_handler(optimizer):
             assert hasattr(exec, "_rev_chunk_index")
             chunk_id = exec._rev_chunk_index[instr.stage]
             mpu.set_virtual_pipeline_model_parallel_rank(chunk_id)
-        # interleaved scheduling is more involved, supporting it later
         assert hasattr(exec, "input_tensors")
         assert hasattr(exec, "output_tensors")
         buffer_ids = instr.buffer_ids
-        key = (instr.microbatch, exec.execution_plan.nstages - instr.stage)
+        key = (instr.microbatch, exec.execution_plan.nstages - 1 - instr.stage)
         input_tensor = exec.input_tensors[key]
         exec.input_tensors[key] = None
         output_tensor, _ = zip(*exec.output_tensors[key])
         output_tensor = list(output_tensor)
         exec.output_tensors[key] = None
         output_tensor_grad = [exec.buffer_slots[buffer_id] for buffer_id in buffer_ids if exec.buffer_slots[buffer_id] is not None]
+        # on first backward stage, output_tensor_grad should be None
+        if instr.stage == exec.execution_plan.nstages // 2:
+            if args.virtual_pipeline_model_parallel_size is None:
+                # no virtual pipeline
+                output_tensor_grad = [None, None]
+            else:
+                output_tensor_grad = [None]
         # same here, if there are two output tensor grads, we need to swap them
         # to match Megatron-LM's order (decoder output, encoder activation)
         if len(output_tensor_grad) == 2:
@@ -213,18 +219,28 @@ def _handle_send_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
         "Number of output tensors and number of tensor shapes do not match."
         " Expected {}, got {}".format(len(output_tensors), len(tensor_shapes)))
     output_tensors = output_tensors[:len(tensor_shapes)]
-    pending_ops = []
+
+    p2p_ops = []
     for (output_tensor, tensor_shape) in zip(output_tensors, tensor_shapes):
         if tensor_shape is None:
             continue
-        op = dist.isend(output_tensor, instr.peer)
-        pending_ops.append(op)
+        # dist.send(output_tensor, instr.peer)
+        # instead directly using isend, we use batch_isend_irecv so
+        # all communication ops are launched on a single stream.
+        p2p_op = dist.P2POp(dist.isend, output_tensor, instr.peer)
+        p2p_ops.append(p2p_op)
+        # op = dist.isend(output_tensor, instr.peer)
+    pending_ops = dist.batch_isend_irecv(p2p_ops)
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     if not hasattr(exec, "pending_send_ops"):
         exec.pending_send_ops = {}
     exec.pending_send_ops[key] = pending_ops
+    # for op in pending_ops:
+    #     op.wait()
+    # torch.cuda.synchronize()
 
 def _handle_send_finish(exec: PipelineExecutor, instr: CommunicationFinishInsturction):
+    # pass
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     pending_ops = exec.pending_send_ops[key]
     exec.pending_send_ops[key] = None
@@ -252,21 +268,29 @@ def _handle_recv_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
     # transpose tensor shapes
     tensor_shapes = [_transpose_tensor_shape(s) for s in tensor_shapes]
     input_tensors = [torch.empty(tensor_shape, dtype=dtype, requires_grad=requires_grad, device=torch.cuda.current_device()) for tensor_shape in tensor_shapes]
-    pending_ops = []
+
+    p2p_ops = []
     for (input_tensor, tensor_shape) in zip(input_tensors, tensor_shapes):
         if tensor_shape is None:
             continue
-        op = dist.irecv(input_tensor, instr.peer)
-        pending_ops.append(op)
+        # dist.recv(input_tensor, instr.peer)
+        p2p_op = dist.P2POp(dist.irecv, input_tensor, instr.peer)
+        p2p_ops.append(p2p_op)
+        # op = dist.irecv(input_tensor, instr.peer)
+    pending_ops = dist.batch_isend_irecv(p2p_ops)
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     if not hasattr(exec, "pending_recv_ops"):
         exec.pending_recv_ops = {}
     exec.pending_recv_ops[key] = pending_ops
+    # for op in pending_ops:
+    #     op.wait()
+    # torch.cuda.synchronize()
     # add the input tensors to the buffer slots
     for buffer_id, input_tensor in zip(instr.buffer_ids, input_tensors):
         exec.buffer_slots[buffer_id] = input_tensor
 
 def _handle_recv_finish(exec: PipelineExecutor, instr: CommunicationFinishInsturction):
+    # pass
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     pending_ops = exec.pending_recv_ops[key]
     exec.pending_recv_ops[key] = None
