@@ -20,3 +20,6 @@ build
 *.egg-info
 /*.pkl
 plopt_debug*/*
+_memory_viz.py
+/*.svg
+/*.html
