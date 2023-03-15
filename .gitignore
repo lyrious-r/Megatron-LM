@@ -18,7 +18,7 @@ megatron/fused_kernels/build/
 build
 .coverage_*
 *.egg-info
-/*.pkl
+*.pkl
 plopt_debug*/*
 _memory_viz.py
 /*.svg

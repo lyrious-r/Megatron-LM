@@ -27,6 +27,9 @@ from megatron import (
     print_rank_0,
     update_num_microbatches,
 )
+from megatron.utils import unwrap_model
+from megatron.model import DistributedDataParallel as LocalDDP
+from megatron.model import Float16Module
 from megatron.core import mpu
 from megatron.initialize import initialize_megatron, set_jit_fusion_options
 from megatron.model import ModelType, T5Model
@@ -450,6 +453,9 @@ def generate_report(n_iters, save_path=None):
 
     f = None
     if save_path is not None:
+        save_dir = os.path.dirname(save_path)
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
         f = open(save_path, "w")
         # write basic data of the model into the file
         f.write("# " + get_microbenchmark_name() + "\n")
@@ -586,26 +592,33 @@ def microbenchmark(
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
         model_provider, model_type
     )
+    if isinstance(model, list):
+        assert len(model) == 1
+        unwrapped_model = unwrap_model(model[0], (torchDDP, LocalDDP, Float16Module))
+    else:
+        unwrapped_model = unwrap_model(model, (torchDDP, LocalDDP, Float16Module))
+    if isinstance(unwrapped_model, T5Model):
+        unwrapped_model = unwrapped_model.language_model
 
     # print model parameters and optimizer states in MB
     def _get_param_size(params):
         return sum(p.numel() * p.element_size() for p in params) / 1e6
 
-    if hasattr(model, "embedding"):
+    if hasattr(unwrapped_model, "embedding"):
         model_embedding_param_size = _get_param_size(
-            model.embedding.parameters()
+            unwrapped_model.embedding.parameters()
         )
         stat_recorder.add(
             "model_embedding_param_size", model_embedding_param_size
         )
-    if hasattr(model, "encoder"):
-        model_encoder_param_size = _get_param_size(model.encoder.parameters())
+    if hasattr(unwrapped_model, "encoder"):
+        model_encoder_param_size = _get_param_size(unwrapped_model.encoder.parameters())
         stat_recorder.add("model_encoder_param_size", model_encoder_param_size)
-    if hasattr(model, "decoder"):
-        model_decoder_param_size = _get_param_size(model.decoder.parameters())
+    if hasattr(unwrapped_model, "decoder"):
+        model_decoder_param_size = _get_param_size(unwrapped_model.decoder.parameters())
         stat_recorder.add("model_decoder_param_size", model_decoder_param_size)
-    if hasattr(model, "pooler"):
-        model_pooler_param_size = _get_param_size(model.pooler.parameters())
+    if hasattr(unwrapped_model, "pooler"):
+        model_pooler_param_size = _get_param_size(unwrapped_model.pooler.parameters())
         stat_recorder.add("model_pooler_param_size", model_pooler_param_size)
 
     iteration = 0

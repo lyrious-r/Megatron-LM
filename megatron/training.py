@@ -477,12 +477,6 @@ def train_step(forward_step_func, data_iterator,
         optimizer, fwd_bwd_timers, forward_only=False)
     timers('forward-backward').stop()
 
-    # memory_dict = torch.cuda.memory_stats()
-    # import json
-    # with open("./memory_stats_{}.txt".format(mpu.get_pipeline_model_parallel_rank()), "a") as f:
-    #     f.write(json.dumps(memory_dict) + "\n")
-    # torch.cuda.reset_peak_memory_stats()
-
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
         torch.cuda.empty_cache()
@@ -566,8 +560,8 @@ def plopt_train_step(data_iterator, forward_step_func,
         microbatch_iterator = iter(microbatch)
     executor = get_pipeline_executor(forward_step_func, microbatch_iterator, model, optimizer)
     executor.execute(execution_plan)
+    losses_reduced = executor.forward_data_store
     timers('forward-backward').stop()
-
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
@@ -613,62 +607,12 @@ def plopt_train_step(data_iterator, forward_step_func,
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
         # Average loss across microbatches.
-        # loss_reduced = {}
-        # for key in losses_reduced[0]:
-        #     losses_reduced_for_key = [x[key] for x in losses_reduced]
-        #     loss_reduced[key] = sum(losses_reduced_for_key) / len(losses_reduced_for_key)
-        return {}, skipped_iter, grad_norm, num_zeros_in_grad
+        loss_reduced = {}
+        for key in losses_reduced[0]:
+            losses_reduced_for_key = [x[key] for x in losses_reduced]
+            loss_reduced[key] = sum(losses_reduced_for_key) / len(losses_reduced_for_key)
+        return loss_reduced, skipped_iter, grad_norm, num_zeros_in_grad
     return {}, skipped_iter, grad_norm, num_zeros_in_grad
-
-def training_log_wo_tfboard(iteration, report_memory_flag):
-    """Log training information such as losses, timing, ...."""
-    args = get_args()
-    timers = get_timers()
-    # Logging.
-    timers_to_log = [
-        'forward-backward',
-        'forward-compute',
-        'backward-compute',
-        'batch-generator',
-        'forward-recv',
-        'forward-send',
-        'backward-recv',
-        'backward-send',
-        'forward-send-forward-recv',
-        'forward-send-backward-recv',
-        'backward-send-forward-recv',
-        'backward-send-backward-recv',
-        'forward-backward-send-forward-backward-recv',
-        'layernorm-grads-all-reduce',
-        'embedding-grads-all-reduce',
-        'grads-all-reduce',
-        'grads-reduce-scatter',
-        'params-all-gather',
-        'optimizer-copy-to-main-grad',
-        'optimizer-unscale-and-check-inf',
-        'optimizer-clip-main-grad',
-        'optimizer-count-zeros',
-        'optimizer-inner-step',
-        'optimizer-copy-main-to-model-params',
-        'optimizer']
-
-    if iteration % args.log_interval == 0:
-        elapsed_time = timers('interval-time').elapsed(barrier=True)
-        elapsed_time_per_iteration = elapsed_time / args.log_interval
-        log_string = ' iteration {:8d}/{:8d} |'.format(
-            iteration, args.train_iters)
-        log_string += ' consumed samples: {:12d} |'.format(
-            args.consumed_train_samples)
-        log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(
-            elapsed_time_per_iteration * 1000.0)
-        print_rank_last(log_string)
-        if report_memory_flag:
-            # Report memory after optimizer state has been initialized.
-            report_memory('(after {} iterations)'.format(iteration))
-            report_memory_flag = False
-        timers.log(timers_to_log, normalizer=args.log_interval)
-
-    return report_memory_flag
 
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
@@ -909,6 +853,14 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     print_datetime('before the start of training step')
     report_memory_flag = True
     rank = mpu.get_pipeline_model_parallel_rank()
+    import pickle
+    def oom_observer(device, alloc, device_alloc, device_free):
+        # snapshot right after an OOM happened
+        print('saving allocated state during OOM')
+        snapshot = torch.cuda.memory._snapshot()
+        pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
+
+    torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
     if DEBUG_DUMP_MEMORY_STATS:
         torch.cuda.memory._record_memory_history(True)
@@ -919,7 +871,8 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
         try:
-            plopt_train_step(
+            loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+                plopt_train_step(
                         train_data_iterator,
                         forward_step_func,
                         model,
@@ -971,7 +924,15 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             with open(args.per_iter_time_log_path, 'a') as f:
                 f.write(str(timers('iteration-time').elapsed()) + "\n")
         # Logging.
-        report_memory_flag = training_log_wo_tfboard(iteration, report_memory_flag)
+        loss_scale = optimizer.get_loss_scale().item()
+        params_norm = None
+        if args.log_params_norm:
+            params_norm = calc_params_l2_norm(model)
+        report_memory_flag = training_log(loss_dict, total_loss_dict,
+                                          optimizer.param_groups[0]['lr'],
+                                          iteration, loss_scale,
+                                          report_memory_flag, skipped_iter,
+                                          grad_norm, params_norm, num_zeros_in_grad)
 
         # Exiting based on duration
         if args.exit_duration_in_mins:
@@ -996,6 +957,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator, valid_data_iterator,
           process_non_loss_data_func):
     """Train the model function."""
+    from plopt.utils.logger import logger
     args = get_args()
     timers = get_timers()
 
@@ -1012,11 +974,14 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     # Iterations.
     orig_iteration = args.iteration
     iteration = args.iteration
-
+    
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
     report_memory_flag = True
+    rank = mpu.get_pipeline_model_parallel_rank()
     while iteration < args.train_iters:
+        if rank == 0:
+            logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
