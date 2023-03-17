@@ -91,6 +91,7 @@ class T5Model(MegatronModule):
         self.post_process = post_process
         self.add_encoder = add_encoder
         self.add_decoder = add_decoder
+        self.hooks = hooks
 
         self.language_model, self._language_model_key = get_language_model(
             num_tokentypes=num_tokentypes,
@@ -157,6 +158,8 @@ class T5Model(MegatronModule):
                                                                                 lm_labels)
                 # [s b] => [b s]
                 lm_loss = lm_loss.transpose(0,1).contiguous()
+            if "postprocess" in self.hooks:
+                self.hooks["postprocess"]()
             return lm_loss
         elif self.add_decoder and not self.add_encoder:
             decoder_output, encoder_output = lm_output

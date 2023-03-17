@@ -492,10 +492,6 @@ class TransformerLanguageModel(MegatronModule):
 
         if "decoder" in self.hooks and "postprocess" not in self.hooks:
             self.hooks["decoder"]()
-        elif "postprocess" in self.hooks:
-            # decoder and postprocess_grad are registered in the
-            # ParallelTransformer class
-            self.hooks["postprocess"]()
 
         if self.add_pooler and self.post_process:
             return decoder_output, encoder_output, pooled_output
