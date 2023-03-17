@@ -51,8 +51,7 @@ def get_language_model(num_tokentypes, add_pooler,
                        add_decoder=False,
                        decoder_attn_mask_type=AttnMaskType.causal,
                        pre_process=True, post_process=True,
-                       enc_output_fw_hook=None,
-                       enc_output_gradient_hook=None):
+                       hooks=None):
     """Build language model and return along with the key to save."""
     args = get_args()
 
@@ -75,8 +74,7 @@ def get_language_model(num_tokentypes, add_pooler,
         add_pooler=add_pooler,
         pre_process=pre_process,
         post_process=post_process,
-        enc_output_fw_hook=enc_output_fw_hook,
-        enc_output_gradient_hook=enc_output_gradient_hook
+        hooks=hooks,
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -328,8 +326,7 @@ class TransformerLanguageModel(MegatronModule):
                  add_pooler=False,
                  pre_process=True,
                  post_process=True,
-                 enc_output_fw_hook=None,
-                 enc_output_gradient_hook=None):
+                 hooks=None):
         super(TransformerLanguageModel, self).__init__()
         args = get_args()
 
@@ -344,8 +341,7 @@ class TransformerLanguageModel(MegatronModule):
         self.decoder_attn_mask_type = decoder_attn_mask_type
         self.add_pooler = add_pooler
         self.encoder_hidden_state = None
-        self.enc_output_fw_hook = enc_output_fw_hook
-        self.enc_output_gradient_hook = enc_output_gradient_hook
+        self.hooks = {} if hooks is None else hooks
 
         # Embeddings.
         if self.pre_process:
@@ -366,7 +362,8 @@ class TransformerLanguageModel(MegatronModule):
                 output_layer_init_method,
                 self_attn_mask_type=self.encoder_attn_mask_type,
                 pre_process=self.pre_process,
-                post_process=self.post_process
+                post_process=self.post_process,
+                hooks = hooks
             )
             self._encoder_key = 'encoder'
         else:
@@ -381,7 +378,8 @@ class TransformerLanguageModel(MegatronModule):
                 layer_type=LayerType.decoder,
                 self_attn_mask_type=self.decoder_attn_mask_type,
                 pre_process=self.pre_process,
-                post_process=self.post_process)
+                post_process=self.post_process,
+                hooks = hooks)
             self._decoder_key = 'decoder'
         else:
             self.decoder = None
@@ -431,6 +429,11 @@ class TransformerLanguageModel(MegatronModule):
         if self.pre_process:
             encoder_input = self.embedding(enc_input_ids, enc_position_ids,
                                            tokentype_ids=tokentype_ids)
+            if "enc_embedding" in self.hooks:
+                self.hooks["enc_embedding"]()
+
+            if "encoder_grad" in self.hooks:
+                encoder_input.register_hook(self.hooks["encoder_grad"])
         else:
             encoder_input = None
 
@@ -446,10 +449,13 @@ class TransformerLanguageModel(MegatronModule):
         else:
             encoder_output = enc_hidden_states.to(encoder_input.dtype)
 
-        if self.enc_output_fw_hook is not None:
-            self.enc_output_fw_hook()
-        if self.enc_output_gradient_hook is not None:
-            encoder_output.register_hook(self.enc_output_gradient_hook)
+        if "encoder" in self.hooks:
+            self.hooks["encoder"]()
+        # since the decoder takes both encoder_output and decoder_input
+        # as input, we register a hook on both tensors and only trigger
+        # on the last
+        if "decoder_grad" in self.hooks:
+            encoder_output.register_hook(self.hooks["decoder_grad"])
 
         if self.post_process:
             if self.add_pooler:
@@ -469,6 +475,10 @@ class TransformerLanguageModel(MegatronModule):
         if self.pre_process:
             decoder_input = self.embedding(dec_input_ids,
                                            dec_position_ids)
+            if "dec_embedding" in self.hooks:
+                self.hooks["dec_embedding"]()
+            if "decoder_grad" in self.hooks:
+                decoder_input.register_hook(self.hooks["decoder_grad"])
         else:
             decoder_input = None
 
@@ -479,6 +489,13 @@ class TransformerLanguageModel(MegatronModule):
             encoder_output=encoder_output,
             enc_dec_attn_mask=enc_dec_attn_mask,
             inference_params=inference_params)
+
+        if "decoder" in self.hooks and "postprocess" not in self.hooks:
+            self.hooks["decoder"]()
+        elif "postprocess" in self.hooks:
+            # decoder and postprocess_grad are registered in the
+            # ParallelTransformer class
+            self.hooks["postprocess"]()
 
         if self.add_pooler and self.post_process:
             return decoder_output, encoder_output, pooled_output

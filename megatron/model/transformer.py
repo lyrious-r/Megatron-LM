@@ -883,7 +883,8 @@ class ParallelTransformer(MegatronModule):
                  self_attn_mask_type=AttnMaskType.padding,
                  post_layer_norm=True,
                  pre_process=True, post_process=True,
-                 drop_path_rate=0.0):
+                 drop_path_rate=0.0,
+                 hooks = None):
         super(ParallelTransformer, self).__init__()
         args = get_args()
 
@@ -896,6 +897,7 @@ class ParallelTransformer(MegatronModule):
         self.post_process = post_process
         self.input_tensor = None
         self.drop_path_rate = drop_path_rate
+        self.hooks = hooks
         self.transformer_impl = args.transformer_impl
 
         # Store activation checkpoiting flag.
@@ -1217,6 +1219,12 @@ class ParallelTransformer(MegatronModule):
                 # Skip counter update for eval and activation checkpointing
                 if torch.is_grad_enabled() and self.training:
                     self.microbatch_count += 1
+
+        if self.layer_type == LayerType.decoder:
+            if "decoder" in self.hooks and "postprocess" in self.hooks:
+                self.hooks["decoder"]()
+                if "postprocess_grad" in self.hooks:
+                    hidden_states.register_hook(self.hooks["postprocess_grad"])
 
         # Final layer norm.
         if self.post_process and self.post_layer_norm:

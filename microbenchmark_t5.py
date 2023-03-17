@@ -16,6 +16,7 @@
 """Microbenchmark T5 layers on a single GPU"""
 from functools import partial
 import os
+import pickle
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -38,8 +39,13 @@ from megatron.schedules import backward_step, forward_step
 from megatron.training import setup_model_and_optimizer
 from megatron.utils import average_losses_across_data_parallel_group
 
+MEMORY_TRACE_DIR = "./microbench_memory_trace"
 WARMUP_ITERATIONS = 20
+TRACE_AT_ITER = WARMUP_ITERATIONS + 2
+BENCHMARK_START_ITER = WARMUP_ITERATIONS + 5
 timer_disabled = True
+memory_trace_enabled = False
+grad_hook_trigger_counts = {}
 
 
 def start_timer(timers, name):
@@ -80,24 +86,78 @@ class StatRecorder:
 
 stat_recorder = StatRecorder()
 
+### Hooks
+# Benchmark will run multiple stages sequentially. To separate stages, we
+# need to add hooks to the model to record the time and memory usage:
+#              Stages                               Hooks
+#                                 (start timer/memory trace for enc_embedding)
+#   -> Embedding FW (enc tokens)      fw_hook("enc_embedding", "encoder")
+#   -> Forward Encoder                fw_hook("encoder", "dec_embedding")
+#   -> Embedding FW (dec tokens)      fw_hook("dec_embedding", "decoder")
+#   -> Forward Decoder                 fw_hook("decoder", "postprocess")
+#   -> Postprocess FW                    fw_hook("postprocess", None)
+#                                  (start timer/memory trace for postprocess)
+#   -> Postprocess BW                  grad_hook("postprocess", "decoder")
+#   -> Backward Decoder               grad_hook("decoder", "encoder")
+#   (there is no decoder backward embedding since grad is simply accumed)
+#   -> Backward Encoder               grad_hook("encoder", "enc_embedding")
+#   -> Embedding BW (enc tokens)
+#                                   grad hook on embedding weights produce 
+#                                   strange results. we manually stop the
+#                                   timer and record the memory usage.
 
-def enc_output_fw_hook():
+def get_fw_hook(stop_name, start_name):
     timers = get_timers()
-    stop_timer(timers, "forward_encoder")
-    memory_after_enc_fw = torch.cuda.memory_allocated()
-    peak_memory_after_enc_fw = torch.cuda.max_memory_allocated()
-    stat_recorder.add("memory_after_enc_forward", memory_after_enc_fw / 1e6)
-    stat_recorder.add(
-        "peak_memory_after_enc_forward", peak_memory_after_enc_fw / 1e6
-    )
-    start_timer(timers, "forward_decoder")
+    def fw_hook():
+        stop_timer(timers, f"forward_{stop_name}")
+        if memory_trace_enabled:
+            name = get_microbenchmark_name()
+            mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
+            if not os.path.exists(mem_trace_dir):
+                os.makedirs(mem_trace_dir)
+            with open(os.path.join(mem_trace_dir, f"forward_{stop_name}.pkl"), 'wb') as f:
+                snapshot = torch.cuda.memory._snapshot()
+                pickle.dump(snapshot, f)
+            # reset the memory history
+            torch.cuda.memory._record_memory_history(True,
+                trace_alloc_max_entries=100000,
+                trace_alloc_record_context=True,)
+        memory_after_fw = torch.cuda.memory_allocated()
+        peak_memory_after_fw = torch.cuda.max_memory_allocated()
+        stat_recorder.add(f"memory_after_{stop_name}", memory_after_fw / 1e6)
+        stat_recorder.add(
+            f"peak_memory_after_{stop_name}", peak_memory_after_fw / 1e6
+        )
+        if start_name is not None:
+            start_timer(timers, f"forward_{start_name}")
+    return fw_hook
 
-
-def enc_output_grad_hook(grad):
+def get_grad_hook(stop_name, start_name, n_triggers=1):
     timers = get_timers()
-    stop_timer(timers, "backward_decoder")
-    return grad
-
+    def grad_hook(grad):
+        key = (stop_name, start_name)
+        if key not in grad_hook_trigger_counts:
+            grad_hook_trigger_counts[key] = 1
+        else:
+            grad_hook_trigger_counts[key] += 1
+        if grad_hook_trigger_counts[key] == n_triggers:
+            stop_timer(timers, f"backward_{stop_name}")
+            if memory_trace_enabled:
+                name = get_microbenchmark_name()
+                mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
+                if not os.path.exists(mem_trace_dir):
+                    os.makedirs(mem_trace_dir)
+                with open(os.path.join(mem_trace_dir, f"backward_{stop_name}.pkl"), 'wb') as f:
+                    snapshot = torch.cuda.memory._snapshot()
+                    pickle.dump(snapshot, f)
+                # reset the memory history
+                torch.cuda.memory._record_memory_history(True,
+                    trace_alloc_max_entries=100000,
+                    trace_alloc_record_context=True,)
+            if start_name is not None:
+                start_timer(timers, f"backward_{start_name}")
+        return grad
+    return grad_hook
 
 def model_provider(
     pre_process=True, post_process=True, add_encoder=True, add_decoder=True
@@ -112,8 +172,16 @@ def model_provider(
         post_process=post_process,
         add_encoder=add_encoder,
         add_decoder=add_decoder,
-        enc_output_fw_hook=enc_output_fw_hook,
-        enc_output_gradient_hook=enc_output_grad_hook,
+        hooks = {
+            "enc_embedding": get_fw_hook("enc_embedding", "encoder"),
+            "encoder": get_fw_hook("encoder", "dec_embedding"),
+            "dec_embedding": get_fw_hook("dec_embedding", "decoder"),
+            "decoder": get_fw_hook("decoder", "postprocess"),
+            "postprocess": get_fw_hook("postprocess", None),
+            "postprocess_grad": get_grad_hook("postprocess", "decoder"),
+            "decoder_grad": get_grad_hook("decoder", "encoder", n_triggers=2),  # encoder output and decoder input
+            "encoder_grad": get_grad_hook("encoder", "enc_embedding"),
+        },
     )
     return model
 
@@ -229,6 +297,7 @@ def train_shape_provider():
 
 
 def benchmark_forward_backward_no_pipelining(
+    iteration,
     forward_step_func,
     data_iterator,
     model,
@@ -238,6 +307,7 @@ def benchmark_forward_backward_no_pipelining(
     collect_non_loss_data=False,
     **kwargs,
 ):
+
     """Run forward and backward passes with no pipeline parallelism
     (no inter-stage communication).
 
@@ -255,7 +325,15 @@ def benchmark_forward_backward_no_pipelining(
         "peak_memory_before_forward", peak_memory_before_forward / 1e6
     )
     start_timer(timers, "forward_total")
-    start_timer(timers, "forward_encoder")
+    start_timer(timers, "forward_enc_embedding")
+    global memory_trace_enabled
+    if iteration == TRACE_AT_ITER:
+        memory_trace_enabled = True
+        torch.cuda.memory._record_memory_history(True,
+            trace_alloc_max_entries=100000,
+            trace_alloc_record_context=True,)
+    else:
+        memory_trace_enabled = False
     output_tensor = forward_step(
         forward_step_func,
         data_iterator,
@@ -265,7 +343,6 @@ def benchmark_forward_backward_no_pipelining(
         timers,
         collect_non_loss_data,
     )
-    stop_timer(timers, "forward_decoder")
     stop_timer(timers, "forward_total")
     memory_after_forward = torch.cuda.memory_allocated()
     peak_memory_after_forward = torch.cuda.max_memory_allocated()
@@ -275,11 +352,24 @@ def benchmark_forward_backward_no_pipelining(
     )
     if not forward_only:
         start_timer(timers, "backward_total")
-        start_timer(timers, "backward_decoder")
+        start_timer(timers, "backward_postprocess")
+        if iteration == TRACE_AT_ITER:
+            torch.cuda.memory._record_memory_history(True,
+                trace_alloc_max_entries=100000,
+                trace_alloc_record_context=True,)
         # backward_decoder stop is called in the gradient hook
         backward_step(
             optimizer, input_tensor, output_tensor, output_tensor_grad, timers
         )
+        if memory_trace_enabled:
+            name = get_microbenchmark_name()
+            mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
+            if not os.path.exists(mem_trace_dir):
+                os.makedirs(mem_trace_dir)
+            with open(os.path.join(mem_trace_dir, f"backward_enc_embedding.pkl"), 'wb') as f:
+                snapshot = torch.cuda.memory._snapshot()
+                pickle.dump(snapshot, f)
+        stop_timer(timers, f"backward_enc_embedding")
         stop_timer(timers, "backward_total")
         memory_after_backward = torch.cuda.memory_allocated()
         peak_memory_after_backward = torch.cuda.max_memory_allocated()
@@ -287,12 +377,15 @@ def benchmark_forward_backward_no_pipelining(
         stat_recorder.add(
             "peak_memory_after_backward", peak_memory_after_backward / 1e6
         )
+    if memory_trace_enabled:
+        torch.cuda.memory._record_memory_history(False)
+        memory_trace_enabled = False
 
     return forward_data_store
 
 
 def benchmark_train_step(
-    forward_step_func, data_iterator, model, optimizer, opt_param_scheduler
+    forward_step_func, data_iterator, model, optimizer, opt_param_scheduler, iteration
 ):
     """Single training step."""
     args = get_args()
@@ -304,9 +397,9 @@ def benchmark_train_step(
             partition.zero_grad_buffer()
     optimizer.zero_grad()
 
-    # Forward pass.
-    forward_backward_func = benchmark_forward_backward_no_pipelining
-    losses_reduced = forward_backward_func(
+    # Forward and Backward pass.
+    losses_reduced = benchmark_forward_backward_no_pipelining(
+        iteration,
         forward_step_func,
         data_iterator,
         model,
@@ -370,6 +463,7 @@ def benchmark_train(
 ):
     """Train the model function."""
     global timer_disabled
+    global grad_hook_trigger_counts
     args = get_args()
     # Turn on training mode which enables dropout.
     for model_module in model:
@@ -399,6 +493,7 @@ def benchmark_train(
             model,
             optimizer,
             opt_param_scheduler,
+            iteration,
         )
         iteration += 1
         args.consumed_train_samples += (
@@ -408,6 +503,7 @@ def benchmark_train(
         )
         if iteration >= WARMUP_ITERATIONS:
             timer_disabled = False
+        grad_hook_trigger_counts = {}
 
     return iteration
 
@@ -508,32 +604,40 @@ def generate_report(n_iters, save_path=None):
     _get_stats_and_print("optimizer_state_size")
     _cprint("Activations ", "-")
     _get_stats_and_print("memory_before_forward")
-    _get_stats_and_print("memory_after_enc_forward")
-    _get_stats_and_print("memory_after_dec_forward")
+    # _get_stats_and_print("memory_after_enc_forward")
+    # _get_stats_and_print("memory_after_dec_forward")
     _get_stats_and_print("memory_after_backward")
     _get_stats_and_print_difference(
-        "memory_after_enc_forward", "memory_before_forward", "enc_activation"
+        "memory_after_enc_embedding", "memory_before_forward", "enc_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_dec_forward",
-        "memory_after_enc_forward",
-        "dec_activation",
+        "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation"
+    )
+    _get_stats_and_print_difference(
+        "memory_after_dec_embedding", "memory_after_encoder", "dec_embedding_encoder_activation"
+    )
+    _get_stats_and_print_difference(
+        "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation"
+    )
+    _get_stats_and_print_difference(
+        "memory_after_postprocess", "memory_after_decoder", "postprocess_activation"
     )
     _get_stats_and_print("peak_memory_before_forward")
-    _get_stats_and_print("peak_memory_after_enc_forward")
-    _get_stats_and_print("peak_memory_after_dec_forward")
     _get_stats_and_print("peak_memory_after_backward")
     _cprint("")
     # execution time summary
     _cprint("Execution Time Summary")
     _get_time_and_print("forward_total")
+    _get_time_and_print("forward_enc_embedding")
     _get_time_and_print("forward_encoder")
+    _get_time_and_print("forward_dec_embedding")
     _get_time_and_print("forward_decoder")
+    _get_time_and_print("forward_postprocess")
     _get_time_and_print("backward_total")
-    _get_time_and_print_difference(
-        "backward_total", "backward_decoder", "backward_encoder"
-    )
+    _get_time_and_print("backward_postprocess")
     _get_time_and_print("backward_decoder")
+    _get_time_and_print("backward_encoder")
+    _get_time_and_print("backward_enc_embedding")
     if f is not None:
         f.close()
 
