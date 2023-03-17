@@ -744,6 +744,8 @@ def _add_training_args(parser):
                           help='Number of warmup iterations for nsys profiling')
     group.add_argument('--nsys-profile-steps', type=int, default=20,
                           help='Number of profiling iterations for nsys profiling')
+    group.add_argument('--debug-dump-memory-trace', action="store_true",
+                          help='Dump memory trace for debugging.')
     group.add_argument('--tokens-per-global-batch', type=int,
                         help='Number of tokens per global batch if dynamic batching is enabled')
     group.add_argument('--per-iter-time-log-path', type=str, default=None,
@@ -955,7 +957,7 @@ def _add_distributed_args(parser):
                        help='Call torch.cuda.empty_cache() each iteration '
                        '(training and eval), to reduce fragmentation.'
                        '0=off, 1=moderate, 2=aggressive.')
-    group.add_argument('--empty-unused-memory-interval', default=400, type=int,
+    group.add_argument('--empty-unused-memory-interval', default=0, type=int,
                        help='Interval between calls to torch.cuda.empty_cache()')
     group.add_argument('--standalone-embedding-stage', action='store_true',
                        default=False, help='If set, *input* embedding layer '
@@ -1229,8 +1231,9 @@ def _add_plopt_args(parser):
     group.add_argument('--plopt-enable-packing', action='store_true',
                         help='Enable packing in plopt.')
     group.add_argument('--plopt-per-mb-mem-fraction', type=float,
-                       default=0.5, help='Fraction of memory limit to use per '
-                        'micro-batch during DP.')
+                       default=-1.0, help='Fraction of memory limit to use per '
+                        'micro-batch during DP. Default is -1.0, which means '
+                        'use device memory / number of devices')
     group.add_argument('--plopt-prefetch-planner-num-workers', type=int,
                         help='Number of planner workers to use. '
                              'Suggest to use larger numbers to better '

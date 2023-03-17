@@ -9,8 +9,8 @@ NNODES=1
 NODE_RANK=0
 WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-DATA_PATH=/root/Megatron-LM/cleaned_supervised_proportional_inputs_document
-TARGETS_DATA_PATH=/root/Megatron-LM/cleaned_supervised_proportional_targets_document
+DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_document
+TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
 export PLOPT_DEBUG=INFO

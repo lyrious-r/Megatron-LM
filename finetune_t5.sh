@@ -9,11 +9,11 @@ NNODES=1
 NODE_RANK=0
 WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-DATA_PATH=/root/Megatron-LM/cleaned_supervised_proportional_inputs_document
-TARGETS_DATA_PATH=/root/Megatron-LM/cleaned_supervised_proportional_targets_document
+DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_document
+TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
-export PLOPT_DEBUG=DEBUG
+export PLOPT_DEBUG=INFO
 export PLOPT_LOGGING_DEBUG_DIR=/root/Megatron-LM/plopt_debug
 export NCCL_DEBUG=VERSION
 
@@ -60,7 +60,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --dataloader-type ordered \
        --recompute-method uniform \
        --use-plopt \
-       --plopt-cost-model /root/Megatron-LM/t5_11b_torch210.pkl \
+       --plopt-cost-model /root/Megatron-LM/t5_11b_cm.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \
        --plopt-device-memory-limit 37000 \
        --plopt-intra-node-bw 4800 \
@@ -70,5 +70,4 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --tokens-per-global-batch 16384 \
        --plopt-prefetch-planner-num-workers 32 \
        --plopt-reserve-all-memory \
-       --plopt-per-mb-mem-fraction 0.5 \
        2>&1 | tee log_t5_11b_6l_plopt_linear_gbs16384.txt

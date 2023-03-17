@@ -9,16 +9,17 @@ NNODES=1
 NODE_RANK=0
 WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-DATA_PATH=/root/Megatron-LM/cleaned_supervised_proportional_inputs_document
-TARGETS_DATA_PATH=/root/Megatron-LM/cleaned_supervised_proportional_targets_document
+DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_document
+TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
 export PLOPT_DEBUG=INFO
+export NCCL_DEBUG=VERSION
 # export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use_env"
 
-nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:10000 -o t5_11b_6l_plopt_linear_gbs16384_debug -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:10000 -o t5_11b_6l_plopt_linear_gbs16384 -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
@@ -48,7 +49,7 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --lr-warmup-fraction .01 \
        --weight-decay 1e-2 \
        --clip-grad 1.0 \
-       --log-interval 50 \
+       --log-interval 20 \
        --save-interval 10000 \
        --eval-interval 1000 \
        --eval-iters 5 \
@@ -59,7 +60,7 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --dataloader-type ordered \
        --recompute-method uniform \
        --use-plopt \
-       --plopt-cost-model /root/Megatron-LM/t5_11b_torch210.pkl \
+       --plopt-cost-model /root/Megatron-LM/t5_11b_cm.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \
        --plopt-device-memory-limit 37000 \
        --plopt-intra-node-bw 4800 \
@@ -69,8 +70,7 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --tokens-per-global-batch 16384 \
        --plopt-prefetch-planner-num-workers 32 \
        --profile-with-nsys \
-       --nsys-profile-warmup 100 \
-       --nsys-profile-steps 100 \
+       --nsys-profile-warmup 20 \
+       --nsys-profile-steps 20 \
        --plopt-reserve-all-memory \
-       --plopt-per-mb-mem-fraction 0.5 \
        2>&1 | tee log_t5_11b_6l_plopt_linear_gbs16384_nsys_debug.txt

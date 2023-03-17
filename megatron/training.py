@@ -45,7 +45,7 @@ from megatron.data.t5_dataset import T5UnsupervisedDataset
 
 from .pipeline_executor import get_pipeline_executor
 
-DEBUG_DUMP_MEMORY_STATS = True
+DEBUG_DUMP_MEMORY_STATS = False
 
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
@@ -862,6 +862,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
 
     torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
+    if args.debug_dump_memory_trace:
+        assert not DEBUG_DUMP_MEMORY_STATS, \
+            "Cannot use both debug_dump_memory_trace and " \
+            "debug_dump_memory_stats"
     if DEBUG_DUMP_MEMORY_STATS:
         torch.cuda.memory._record_memory_history(True)
     while iteration < args.train_iters:
@@ -916,6 +920,22 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
                 logger.warning("Cuda profiler stopped.")
                 torch.cuda.cudart().cudaProfilerStop()
+        if args.debug_dump_memory_trace:
+            if iteration - orig_iteration == args.nsys_profile_warmup:
+                logger.warning("Enabling debug_dump_memory_trace.")
+                torch.cuda.memory._record_memory_history(True,
+                    trace_alloc_max_entries=100000,
+                    trace_alloc_record_context=True,)
+            if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
+                import os
+                import pickle
+                if not os.path.exists('./memory_trace'.format(rank)):
+                    os.makedirs('./memory_trace'.format(rank))
+                with open(f'./memory_trace/rank_{rank}.pkl', 'wb') as f:
+                    snapshot = torch.cuda.memory._snapshot()
+                    pickle.dump(snapshot, f)
+                torch.distributed.barrier()
+                exit(1)
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
