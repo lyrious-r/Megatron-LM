@@ -115,6 +115,7 @@ def get_fw_hook(stop_name, start_name):
             mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
             if not os.path.exists(mem_trace_dir):
                 os.makedirs(mem_trace_dir)
+            torch.cuda.synchronize()
             with open(os.path.join(mem_trace_dir, f"forward_{stop_name}.pkl"), 'wb') as f:
                 snapshot = torch.cuda.memory._snapshot()
                 pickle.dump(snapshot, f)
@@ -147,6 +148,7 @@ def get_grad_hook(stop_name, start_name, n_triggers=1):
                 mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
                 if not os.path.exists(mem_trace_dir):
                     os.makedirs(mem_trace_dir)
+                torch.cuda.synchronize()
                 with open(os.path.join(mem_trace_dir, f"backward_{stop_name}.pkl"), 'wb') as f:
                     snapshot = torch.cuda.memory._snapshot()
                     pickle.dump(snapshot, f)
@@ -177,7 +179,7 @@ def model_provider(
             "encoder": get_fw_hook("encoder", "dec_embedding"),
             "dec_embedding": get_fw_hook("dec_embedding", "decoder"),
             "decoder": get_fw_hook("decoder", "postprocess"),
-            "postprocess": get_fw_hook("postprocess", None),
+            # "postprocess": get_fw_hook("postprocess", None),
             "postprocess_grad": get_grad_hook("postprocess", "decoder"),
             "decoder_grad": get_grad_hook("decoder", "encoder", n_triggers=2),  # encoder output and decoder input
             "encoder_grad": get_grad_hook("encoder", "enc_embedding"),
@@ -343,6 +345,7 @@ def benchmark_forward_backward_no_pipelining(
         timers,
         collect_non_loss_data,
     )
+    get_fw_hook("postprocess", None)()
     stop_timer(timers, "forward_total")
     memory_after_forward = torch.cuda.memory_allocated()
     peak_memory_after_forward = torch.cuda.max_memory_allocated()
@@ -366,9 +369,14 @@ def benchmark_forward_backward_no_pipelining(
             mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
             if not os.path.exists(mem_trace_dir):
                 os.makedirs(mem_trace_dir)
+            torch.cuda.synchronize()
             with open(os.path.join(mem_trace_dir, f"backward_enc_embedding.pkl"), 'wb') as f:
                 snapshot = torch.cuda.memory._snapshot()
                 pickle.dump(snapshot, f)
+            # reset
+            torch.cuda.memory._record_memory_history(True,
+                    trace_alloc_max_entries=100000,
+                    trace_alloc_record_context=True,)
         stop_timer(timers, f"backward_enc_embedding")
         stop_timer(timers, "backward_total")
         memory_after_backward = torch.cuda.memory_allocated()
@@ -377,9 +385,9 @@ def benchmark_forward_backward_no_pipelining(
         stat_recorder.add(
             "peak_memory_after_backward", peak_memory_after_backward / 1e6
         )
-    if memory_trace_enabled:
-        torch.cuda.memory._record_memory_history(False)
-        memory_trace_enabled = False
+        if memory_trace_enabled:
+            torch.cuda.memory._record_memory_history(False)
+            memory_trace_enabled = False
 
     return forward_data_store
 

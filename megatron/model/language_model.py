@@ -490,9 +490,6 @@ class TransformerLanguageModel(MegatronModule):
             enc_dec_attn_mask=enc_dec_attn_mask,
             inference_params=inference_params)
 
-        if "decoder" in self.hooks and "postprocess" not in self.hooks:
-            self.hooks["decoder"]()
-
         if self.add_pooler and self.post_process:
             return decoder_output, encoder_output, pooled_output
         else:

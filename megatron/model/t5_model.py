@@ -158,8 +158,6 @@ class T5Model(MegatronModule):
                                                                                 lm_labels)
                 # [s b] => [b s]
                 lm_loss = lm_loss.transpose(0,1).contiguous()
-            if "postprocess" in self.hooks:
-                self.hooks["postprocess"]()
             return lm_loss
         elif self.add_decoder and not self.add_encoder:
             decoder_output, encoder_output = lm_output

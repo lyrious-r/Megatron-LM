@@ -1221,10 +1221,9 @@ class ParallelTransformer(MegatronModule):
                     self.microbatch_count += 1
 
         if self.layer_type == LayerType.decoder:
-            if "decoder" in self.hooks and "postprocess" in self.hooks:
+            if "decoder" in self.hooks and "postprocess_grad" in self.hooks:
                 self.hooks["decoder"]()
-                if "postprocess_grad" in self.hooks:
-                    hidden_states.register_hook(self.hooks["postprocess_grad"])
+                hidden_states.register_hook(self.hooks["postprocess_grad"])
 
         # Final layer norm.
         if self.post_process and self.post_layer_norm:
