@@ -70,4 +70,5 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --tokens-per-global-batch 16384 \
        --plopt-prefetch-planner-num-workers 32 \
        --plopt-reserve-all-memory \
+       --plopt-custom-allocator \
        2>&1 | tee log_t5_11b_6l_plopt_linear_gbs16384.txt

@@ -49,6 +49,12 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
     # tensorboard-writer, and timers.
     set_global_variables(args)
 
+    if args.plopt_custom_allocator:
+        from plopt.memory_opt.cuda_caching_allocator import override_allocator
+        from plopt.memory_opt.host_caching_allocator import apply_monkey_patch
+        override_allocator()
+        apply_monkey_patch()
+
     # torch.distributed initialization
     def finish_mpu_init():
         args = get_args()

@@ -19,7 +19,7 @@ export NCCL_DEBUG=VERSION
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use_env"
 
-nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:10000 -o t5_11b_6l_plopt_linear_gbs16384 -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:1000 -o t5_11b_6l_plopt_linear_gbs16384 -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
@@ -73,4 +73,5 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --nsys-profile-warmup 20 \
        --nsys-profile-steps 20 \
        --plopt-reserve-all-memory \
+       --plopt-custom-allocator \
        2>&1 | tee log_t5_11b_6l_plopt_linear_gbs16384_nsys_debug.txt

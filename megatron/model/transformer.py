@@ -1220,7 +1220,7 @@ class ParallelTransformer(MegatronModule):
                 if torch.is_grad_enabled() and self.training:
                     self.microbatch_count += 1
 
-        if self.layer_type == LayerType.decoder:
+        if self.layer_type == LayerType.decoder and self.hooks is not None:
             if "decoder" in self.hooks and "postprocess_grad" in self.hooks:
                 self.hooks["decoder"]()
                 hidden_states.register_hook(self.hooks["postprocess_grad"])

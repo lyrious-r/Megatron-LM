@@ -35,7 +35,6 @@ from megatron.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.utils import check_adlr_autoresume_termination
 from megatron.utils import unwrap_model
-from megatron.utils import reserve_full_memory
 from megatron.data.data_samplers import build_pretraining_data_loader
 from megatron.utils import calc_params_l2_norm
 from megatron.schedules import get_forward_backward_func
@@ -44,6 +43,8 @@ from megatron.model.vision.knn_monitor import compute_feature_bank
 from megatron.data.t5_dataset import T5UnsupervisedDataset
 
 from .pipeline_executor import get_pipeline_executor
+
+from plopt.memory_opt.utils import reserve_full_memory
 
 DEBUG_DUMP_MEMORY_STATS = False
 
@@ -843,24 +844,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     orig_iteration = args.iteration
     iteration = args.iteration
 
-    if args.plopt_reserve_all_memory:
-        # Reserve all GPU memory upfront.
-        reserved_memory = reserve_full_memory()
-        logger.info("Reserved memory: {:.2f} GB".format(
-            reserved_memory / 1024.0 / 1024.0 / 1024.0))
-
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
-    report_memory_flag = True
+    report_memory_flag = True if not args.plopt_custom_allocator else False
     rank = mpu.get_pipeline_model_parallel_rank()
-    import pickle
-    def oom_observer(device, alloc, device_alloc, device_free):
-        # snapshot right after an OOM happened
-        print('saving allocated state during OOM')
-        snapshot = torch.cuda.memory._snapshot()
-        pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
-
-    torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
     if args.debug_dump_memory_trace:
         assert not DEBUG_DUMP_MEMORY_STATS, \
@@ -869,6 +856,21 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     if DEBUG_DUMP_MEMORY_STATS:
         torch.cuda.memory._record_memory_history(True)
     while iteration < args.train_iters:
+        if iteration == 1:
+            if args.plopt_reserve_all_memory:
+                # Reserve all GPU memory upfront.
+                reserved_memory = reserve_full_memory()
+                logger.info("Reserved memory: {:.2f} GB".format(
+                    reserved_memory / 1024.0 / 1024.0 / 1024.0))
+            # torch.cuda.memory._record_memory_history(True)
+            import pickle
+            def oom_observer(device, alloc, device_alloc, device_free):
+                # snapshot right after an OOM happened
+                print('saving allocated state during OOM')
+                snapshot = torch.cuda.memory._snapshot()
+                pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
+            if not args.plopt_custom_allocator:
+                torch._C._cuda_attach_out_of_memory_observer(oom_observer)
         if rank == 0:
             logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()

@@ -1247,6 +1247,8 @@ def _add_plopt_args(parser):
                              'Supported types: \"none\", \"full\", \"selective\".')
     group.add_argument('--plopt-round-seqlen-multiple', type=int, default=8,
                         help='Round sequence length to a multiple of this value.')
+    group.add_argument('--plopt-custom-allocator', action='store_true',
+                        help='Use our modified memory allocator.')
     group.add_argument('--plopt-reserve-all-memory', action='store_true',
                         help='Reserve all memory before training starts.')
     return parser
