@@ -36,6 +36,7 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none -c cudaProfilerApi -
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
+       --no-scatter-gather-tensors-in-pipeline \
        --train-iters 500 \
        --train-epochs 1 \
        --lr-decay-iters 100 \

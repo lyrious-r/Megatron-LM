@@ -13,27 +13,26 @@ DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_docu
 TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
-export PLOPT_DEBUG=INFO
-
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use-env"
 
 python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
-       --encoder-num-layers 12 \
-       --decoder-num-layers 12 \
+       --encoder-num-layers 4 \
+       --decoder-num-layers 4 \
        --hidden-size 1024 \
-       --num-attention-heads 32 \
+       --num-attention-heads 128 \
        --kv-channels 128 \
-       --ffn-hidden-size 16384 \
+       --ffn-hidden-size 65536 \
        --encoder-seq-length 1024 \
        --decoder-seq-length 1024 \
-       --micro-batch-size 2 \
+       --micro-batch-size 1 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
-       --train-iters 470 \
+       --no-scatter-gather-tensors-in-pipeline \
+       --train-iters 250 \
        --train-epochs 1 \
        --lr-decay-iters 100 \
        --data-path $DATA_PATH \
@@ -56,9 +55,9 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --num-workers 2 \
        --pipeline-model-parallel-split-rank 2 \
        --dataloader-type ordered \
-       --num-layers-per-virtual-pipeline-stage 3 \
+       --num-layers-per-virtual-pipeline-stage 1 \
        --recompute-method uniform \
        --dynamic-batchsize \
        --tokens-per-global-batch 16384 \
        --pack-dataset \
-       2>&1 | tee log_t5_3b_12l_mlm_interleaved_gbs16384_mbs2.txt
+       2>&1 | tee log_t5_3b_12l_mlm_interleaved_gbs16384_mbs1.txt

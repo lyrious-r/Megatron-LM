@@ -33,6 +33,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
+       --no-scatter-gather-tensors-in-pipeline \
        --train-iters 470 \
        --train-epochs 1 \
        --lr-decay-iters 100 \
