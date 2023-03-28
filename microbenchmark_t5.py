@@ -854,7 +854,6 @@ def microbenchmark(
     microbenchmark_save_path = (
         os.path.join(args.microbenchmark_save_dir, f"microbench_{get_microbenchmark_name()}.txt")
     )
-    print("N_iters = ", iteration - BENCHMARK_START_ITER)
     generate_report(iteration - BENCHMARK_START_ITER, microbenchmark_save_path)
 
 
