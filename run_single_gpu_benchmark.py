@@ -9,8 +9,8 @@ CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        microbenchmark_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 1 \
-       --encoder-num-layers 1 \
-       --decoder-num-layers 1 \
+       --encoder-num-layers 3 \
+       --decoder-num-layers 3 \
        --hidden-size {} \
        --num-attention-heads {} \
        --kv-channels {} \

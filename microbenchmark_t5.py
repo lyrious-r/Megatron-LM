@@ -17,6 +17,8 @@
 from functools import partial
 import os
 import pickle
+import time
+import numpy as np
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -24,10 +26,10 @@ from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 from megatron import (
     get_args,
     get_num_microbatches,
-    get_timers,
     print_rank_0,
     update_num_microbatches,
 )
+from megatron.timers import DummyTimer
 from megatron.utils import unwrap_model
 from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.model import Float16Module
@@ -43,21 +45,108 @@ MEMORY_TRACE_DIR = "./microbench_memory_trace"
 WARMUP_ITERATIONS = 20
 TRACE_AT_ITER = WARMUP_ITERATIONS + 2
 BENCHMARK_START_ITER = WARMUP_ITERATIONS + 5
+N_ENCODER_LAYERS = 3
+N_DECODER_LAYERS = 3
 timer_disabled = True
 memory_trace_enabled = False
 grad_hook_trigger_counts = {}
 
+class MBTimer:
+    def __init__(self, name):
+        self.name = name
+        self._elapsed = 0.0
+        self._started = False
+        self._history = []
+        self._start_time = time.time()
+
+    def start(self):
+        """Start the timer."""
+        assert not self._started, 'timer has already been started'
+        torch.cuda.synchronize()
+        self._start_time = time.time()
+        self._started = True
+
+    def stop(self):
+        """Stop the timer."""
+        assert self._started, 'timer is not started'
+        torch.cuda.synchronize()
+        elapsed = time.time() - self._start_time
+        self._elapsed += elapsed
+        self._history.append(elapsed)
+        self._started = False
+
+    def reset(self):
+        """Reset timer."""
+        self._elapsed = 0.0
+        self._history = []
+        self._started = False
+
+    def elapsed(self, reset=True):
+        """Calculate the elapsed time."""
+        _started = self._started
+        # If the timing in progress, end it first.
+        if self._started:
+            self.stop()
+        # Get the elapsed time.
+        _elapsed = self._elapsed
+        # Reset the elapsed time
+        if reset:
+            self.reset()
+        # If timing was in progress, set it back.
+        if _started:
+            self.start()
+        return _elapsed
+
+    def median(self, reset=True):
+        """Get the median of the history."""
+        _started = self._started
+        # If the timing in progress, end it first.
+        if self._started:
+            self.stop()
+        median = np.median(self._history)
+        # Reset the elapsed time
+        if reset:
+            self.reset()
+        # If timing was in progress, set it back.
+        if _started:
+            self.start()
+        return median
+
+class MBTimers:
+    """Group of timers."""
+
+    def __init__(self):
+        self._timers = {}
+        self._dummy_timer = DummyTimer()
+        self._ignore_timers = set()
+
+    def __call__(self, name, log_level=0):
+        if log_level > 0 or name in self._ignore_timers:
+            self._ignore_timers.add(name)
+            return self._dummy_timer
+        # If the timer has already been set, then check if the log-level
+        # is provided, it matches the one that the timer was created with.
+        if name in self._timers:
+            return self._timers[name]
+        self._timers[name] = MBTimer(name)
+        return self._timers[name]
+
+_MBTIMERS = MBTimers()
+
+def get_timers():
+    """Return the timers."""
+    return _MBTIMERS
 
 def start_timer(timers, name):
     if timer_disabled:
         return
-    timers(name, log_level=0).start()
+    timers(name).start()
 
 
 def stop_timer(timers, name):
     if timer_disabled:
         return
-    timers(name, log_level=0).stop()
+    timers(name).stop()
 
 
 class StatRecorder:
@@ -110,6 +199,7 @@ def get_fw_hook(stop_name, start_name):
     timers = get_timers()
     def fw_hook():
         stop_timer(timers, f"forward_{stop_name}")
+        torch.cuda.nvtx.range_pop()
         if memory_trace_enabled:
             name = get_microbenchmark_name()
             mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
@@ -131,6 +221,7 @@ def get_fw_hook(stop_name, start_name):
         )
         if start_name is not None:
             start_timer(timers, f"forward_{start_name}")
+            torch.cuda.nvtx.range_push(f"forward_{start_name}")
     return fw_hook
 
 def get_grad_hook(stop_name, start_name, n_triggers=1):
@@ -143,6 +234,7 @@ def get_grad_hook(stop_name, start_name, n_triggers=1):
             grad_hook_trigger_counts[key] += 1
         if grad_hook_trigger_counts[key] == n_triggers:
             stop_timer(timers, f"backward_{stop_name}")
+            torch.cuda.nvtx.range_pop()
             if memory_trace_enabled:
                 name = get_microbenchmark_name()
                 mem_trace_dir = os.path.join(MEMORY_TRACE_DIR, name)
@@ -158,6 +250,7 @@ def get_grad_hook(stop_name, start_name, n_triggers=1):
                     trace_alloc_record_context=True,)
             if start_name is not None:
                 start_timer(timers, f"backward_{start_name}")
+                torch.cuda.nvtx.range_push(f"backward_{start_name}")
         return grad
     return grad_hook
 
@@ -274,6 +367,9 @@ def forward_step_func(data_iterator, model):
             enc_dec_mask,
         ) = get_batch(data_iterator)
 
+    timers = get_timers()
+    start_timer(timers, "forward_enc_embedding")
+    torch.cuda.nvtx.range_push("forward_enc_embedding")
     # Forward model lm_labels
     output_tensor = model(
         tokens_enc,
@@ -326,8 +422,9 @@ def benchmark_forward_backward_no_pipelining(
     stat_recorder.add(
         "peak_memory_before_forward", peak_memory_before_forward / 1e6
     )
+    if iteration == BENCHMARK_START_ITER:
+        torch.cuda.cudart().cudaProfilerStart()
     start_timer(timers, "forward_total")
-    start_timer(timers, "forward_enc_embedding")
     global memory_trace_enabled
     if iteration == TRACE_AT_ITER:
         memory_trace_enabled = True
@@ -336,6 +433,7 @@ def benchmark_forward_backward_no_pipelining(
             trace_alloc_record_context=True,)
     else:
         memory_trace_enabled = False
+
     output_tensor = forward_step(
         forward_step_func,
         data_iterator,
@@ -356,6 +454,7 @@ def benchmark_forward_backward_no_pipelining(
     if not forward_only:
         start_timer(timers, "backward_total")
         start_timer(timers, "backward_postprocess")
+        torch.cuda.nvtx.range_push("backward_postprocess")
         if iteration == TRACE_AT_ITER:
             torch.cuda.memory._record_memory_history(True,
                 trace_alloc_max_entries=100000,
@@ -377,7 +476,8 @@ def benchmark_forward_backward_no_pipelining(
             torch.cuda.memory._record_memory_history(True,
                     trace_alloc_max_entries=100000,
                     trace_alloc_record_context=True,)
-        stop_timer(timers, f"backward_enc_embedding")
+        stop_timer(timers, "backward_enc_embedding")
+        torch.cuda.nvtx.range_pop()
         stop_timer(timers, "backward_total")
         memory_after_backward = torch.cuda.memory_allocated()
         peak_memory_after_backward = torch.cuda.max_memory_allocated()
@@ -509,7 +609,7 @@ def benchmark_train(
             * args.micro_batch_size
             * get_num_microbatches()
         )
-        if iteration >= WARMUP_ITERATIONS:
+        if iteration >= BENCHMARK_START_ITER:
             timer_disabled = False
         grad_hook_trigger_counts = {}
 
@@ -583,26 +683,28 @@ def generate_report(n_iters, save_path=None):
         if val:
             _rprint("    {}: {:.2f} MB".format(attr_name, val), " ")
 
-    def _get_stats_and_print_difference(attr_name1, attr_name2, new_name):
+    def _get_stats_and_print_difference(attr_name1, attr_name2, new_name, multiplier = 1.0):
         val = stat_recorder.get(attr_name1) - stat_recorder.get(attr_name2)
+        val = val * multiplier
         if val:
             _rprint("    {}: {:.2f} MB".format(new_name, val), " ")
 
-    def _get_time_and_print(attr_name):
-        val = timers(attr_name).elapsed(reset=False)
+    def _get_time_and_print(attr_name, multiplier=1.0):
+        val = timers(attr_name).median(reset=False)
+        val = val * multiplier
         if val:
             _rprint(
-                "    {}: {:.2f} ms".format(attr_name, val / n_iters * 1000),
+                "    {}: {:.2f} ms".format(attr_name, val * 1000),
                 " ",
             )
 
     def _get_time_and_print_difference(attr_name1, attr_name2, new_name):
-        val = timers(attr_name1).elapsed(reset=False) - timers(
+        val = timers(attr_name1).median(reset=False) - timers(
             attr_name2
-        ).elapsed(reset=False)
+        ).median(reset=False)
         if val:
             _rprint(
-                "    {}: {:.2f} ms".format(new_name, val / n_iters * 1000), " "
+                "    {}: {:.2f} ms".format(new_name, val * 1000), " "
             )
 
     _get_stats_and_print("model_embedding_param_size")
@@ -619,13 +721,13 @@ def generate_report(n_iters, save_path=None):
         "memory_after_enc_embedding", "memory_before_forward", "enc_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation"
+        "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation", multiplier= 1 / N_ENCODER_LAYERS
     )
     _get_stats_and_print_difference(
-        "memory_after_dec_embedding", "memory_after_encoder", "dec_embedding_encoder_activation"
+        "memory_after_dec_embedding", "memory_after_encoder", "dec_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation"
+        "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation", multiplier= 1 / N_DECODER_LAYERS
     )
     _get_stats_and_print_difference(
         "memory_after_postprocess", "memory_after_decoder", "postprocess_activation"
@@ -637,14 +739,14 @@ def generate_report(n_iters, save_path=None):
     _cprint("Execution Time Summary")
     _get_time_and_print("forward_total")
     _get_time_and_print("forward_enc_embedding")
-    _get_time_and_print("forward_encoder")
+    _get_time_and_print("forward_encoder", multiplier=1 / N_ENCODER_LAYERS)
     _get_time_and_print("forward_dec_embedding")
-    _get_time_and_print("forward_decoder")
+    _get_time_and_print("forward_decoder", multiplier=1 / N_DECODER_LAYERS)
     _get_time_and_print("forward_postprocess")
     _get_time_and_print("backward_total")
     _get_time_and_print("backward_postprocess")
-    _get_time_and_print("backward_decoder")
-    _get_time_and_print("backward_encoder")
+    _get_time_and_print("backward_decoder", multiplier=1 / N_DECODER_LAYERS)
+    _get_time_and_print("backward_encoder", multiplier=1 / N_ENCODER_LAYERS)
     _get_time_and_print("backward_enc_embedding")
     if f is not None:
         f.close()
@@ -725,10 +827,10 @@ def microbenchmark(
         )
     if hasattr(unwrapped_model, "encoder"):
         model_encoder_param_size = _get_param_size(unwrapped_model.encoder.parameters())
-        stat_recorder.add("model_encoder_param_size", model_encoder_param_size)
+        stat_recorder.add("model_encoder_param_size", model_encoder_param_size / N_ENCODER_LAYERS)
     if hasattr(unwrapped_model, "decoder"):
         model_decoder_param_size = _get_param_size(unwrapped_model.decoder.parameters())
-        stat_recorder.add("model_decoder_param_size", model_decoder_param_size)
+        stat_recorder.add("model_decoder_param_size", model_decoder_param_size / N_DECODER_LAYERS)
     if hasattr(unwrapped_model, "pooler"):
         model_pooler_param_size = _get_param_size(unwrapped_model.pooler.parameters())
         stat_recorder.add("model_pooler_param_size", model_pooler_param_size)
@@ -752,7 +854,8 @@ def microbenchmark(
     microbenchmark_save_path = (
         os.path.join(args.microbenchmark_save_dir, f"microbench_{get_microbenchmark_name()}.txt")
     )
-    generate_report(iteration, microbenchmark_save_path)
+    print("N_iters = ", iteration - BENCHMARK_START_ITER)
+    generate_report(iteration - BENCHMARK_START_ITER, microbenchmark_save_path)
 
 
 if __name__ == "__main__":

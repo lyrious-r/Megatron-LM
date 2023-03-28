@@ -32,6 +32,31 @@ def with_nvtx_stage_name(stage_name):
         return wrapper
     return decorator
 
+def with_check_send_finish_and_free_buffers(func):
+    def check_and_free_wrapper(exec: PipelineExecutor, instr: PipeInstruction):
+        if not hasattr(exec, "pending_send_ops"):
+            exec.pending_send_ops = {}
+            return func(exec, instr)
+        for key, ops in exec.pending_send_ops.items():
+            remaining_ops = []
+            for op in ops:
+                if not op.is_completed():
+                    remaining_ops.append(op)
+                else:
+                    # free output buffer for send activation
+                    (microbatch, stage, instr_key) = key
+                    if instr_key == "act":
+                        # free output tensor if needed
+                        output_key = (microbatch, stage)
+                        output_tensors = exec.output_tensors[output_key]
+                        for (output_tensor, free) in output_tensors:
+                            if free:
+                                deallocate_output_tensor(output_tensor)
+            exec.pending_send_ops[key] = remaining_ops
+        return func(exec, instr)
+    return check_and_free_wrapper
+
+@with_check_send_finish_and_free_buffers
 def _handle_load_input(exec: PipelineExecutor, instr: LoadInput):
     # just set buffers to none, since actual loading is done 
     # in the forward pass
@@ -67,6 +92,7 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
     @with_nvtx_stage_name("forward")
+    @with_check_send_finish_and_free_buffers
     def _handle_forward(exec: PipelineExecutor, instr: ForwardPass):
         # set recompute flag
         flag = recompute_level_to_flag(exec.execution_plan.recompute_method)
@@ -148,6 +174,7 @@ def _create_backward_handler(optimizer):
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
     @with_nvtx_stage_name("backward")
+    @with_check_send_finish_and_free_buffers
     def _handle_backward(exec: PipelineExecutor, instr: BackwardPass):
         if args.virtual_pipeline_model_parallel_size is not None:
             assert hasattr(exec, "_rev_chunk_index")
@@ -208,6 +235,7 @@ def _transpose_tensor_shape(tensor_shape):
     # (microbatch size, sequence length, hidden size)
     return (tensor_shape[1], tensor_shape[0], tensor_shape[2])
 
+@with_check_send_finish_and_free_buffers
 def _handle_send_start(exec: PipelineExecutor, instr: CommunicationStartInstruction):
     output_tensors = [exec.buffer_slots[buffer_id] for buffer_id in instr.buffer_ids if exec.buffer_slots[buffer_id] is not None]
     if not isinstance(output_tensors, list):
@@ -220,17 +248,19 @@ def _handle_send_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
         " Expected {}, got {}".format(len(output_tensors), len(tensor_shapes)))
     output_tensors = output_tensors[:len(tensor_shapes)]
 
-    p2p_ops = []
+    # p2p_ops = []
+    pending_ops = []
     for (output_tensor, tensor_shape) in zip(output_tensors, tensor_shapes):
         if tensor_shape is None:
             continue
         # dist.send(output_tensor, instr.peer)
         # instead directly using isend, we use batch_isend_irecv so
         # all communication ops are launched on a single stream.
-        p2p_op = dist.P2POp(dist.isend, output_tensor, instr.peer)
-        p2p_ops.append(p2p_op)
-        # op = dist.isend(output_tensor, instr.peer)
-    pending_ops = dist.batch_isend_irecv(p2p_ops)
+        # p2p_op = dist.P2POp(dist.isend, output_tensor, instr.peer)
+        # p2p_ops.append(p2p_op)
+        op = dist.isend(output_tensor, instr.peer)
+        pending_ops.append(op)
+    # pending_ops = dist.batch_isend_irecv(p2p_ops)
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     if not hasattr(exec, "pending_send_ops"):
         exec.pending_send_ops = {}
@@ -243,14 +273,19 @@ def _handle_send_finish(exec: PipelineExecutor, instr: CommunicationFinishInstur
     # pass
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     pending_ops = exec.pending_send_ops[key]
-    exec.pending_send_ops[key] = None
+    if not pending_ops:
+        return False
+    exec.pending_send_ops[key] = []
     for op in pending_ops:
         op.wait()
+    return True
 
 @with_nvtx_stage_name("send_forward_finish")
 def _handle_send_forward_finish(exec: PipelineExecutor, instr: CommunicationFinishInsturction):
     # wait
-    _handle_send_finish(exec, instr)
+    needs_freeing = _handle_send_finish(exec, instr)
+    if not needs_freeing:
+        return
     # free output tensor if needed
     output_key = (instr.microbatch, instr.stage)
     output_tensors = exec.output_tensors[output_key]
@@ -258,6 +293,7 @@ def _handle_send_forward_finish(exec: PipelineExecutor, instr: CommunicationFini
         if free:
             deallocate_output_tensor(output_tensor)
 
+@with_check_send_finish_and_free_buffers
 def _handle_recv_start(exec: PipelineExecutor, instr: CommunicationStartInstruction):
     args=get_args()
     dtype = args.params_dtype
@@ -269,15 +305,17 @@ def _handle_recv_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
     tensor_shapes = [_transpose_tensor_shape(s) for s in tensor_shapes]
     input_tensors = [torch.empty(tensor_shape, dtype=dtype, requires_grad=requires_grad, device=torch.cuda.current_device()) for tensor_shape in tensor_shapes]
 
-    p2p_ops = []
+    # p2p_ops = []
+    pending_ops = []
     for (input_tensor, tensor_shape) in zip(input_tensors, tensor_shapes):
         if tensor_shape is None:
             continue
         # dist.recv(input_tensor, instr.peer)
-        p2p_op = dist.P2POp(dist.irecv, input_tensor, instr.peer)
-        p2p_ops.append(p2p_op)
-        # op = dist.irecv(input_tensor, instr.peer)
-    pending_ops = dist.batch_isend_irecv(p2p_ops)
+        # p2p_op = dist.P2POp(dist.irecv, input_tensor, instr.peer)
+        # p2p_ops.append(p2p_op)
+        op = dist.irecv(input_tensor, instr.peer)
+        pending_ops.append(op)
+    # pending_ops = dist.batch_isend_irecv(p2p_ops)
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     if not hasattr(exec, "pending_recv_ops"):
         exec.pending_recv_ops = {}
@@ -293,7 +331,7 @@ def _handle_recv_finish(exec: PipelineExecutor, instr: CommunicationFinishInstur
     # pass
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
     pending_ops = exec.pending_recv_ops[key]
-    exec.pending_recv_ops[key] = None
+    exec.pending_recv_ops[key] = []
     for op in pending_ops:
         op.wait()
 

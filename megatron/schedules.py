@@ -47,11 +47,12 @@ def deallocate_output_tensor(out):
         "expected Tensor, found %s." % type(out).__name__
     assert out._base is None, \
         "counter-productive to free a view of another tensor."
-    out.data = torch.empty(
-        (1,),
-        device = out.device,
-        dtype = out.dtype,
-    )
+    if not out.numel() == 1:
+        out.data = torch.empty(
+            (1,),
+            device = out.device,
+            dtype = out.dtype,
+        )
         
 def custom_backward(output, grad_output):
     '''Directly call C++ autograd engine.

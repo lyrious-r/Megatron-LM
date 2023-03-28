@@ -14,12 +14,13 @@ TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_tar
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
 export PLOPT_DEBUG=INFO
-export NCCL_DEBUG=VERSION
+export NCCL_DEBUG=WARN
 # export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use_env"
 
-nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown --cudabacktrace all:1000 -o t5_11b_6l_plopt_linear_gbs16384 -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+# nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas  --sampling-period 250000 -c cudaProfilerApi --capture-range-end stop-shutdown --samples-per-backtrace 1 --cudabacktrace all:1000 -o t5_11b_6l_plopt_linear_gbs16384_sample -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none -c cudaProfilerApi --capture-range-end stop-shutdown -o t5_11b_6l_plopt_linear_gbs16384_no_sample -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \

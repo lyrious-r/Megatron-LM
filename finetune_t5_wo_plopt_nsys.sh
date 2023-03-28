@@ -13,21 +13,21 @@ DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_docu
 TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
-DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
+DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use_env"
 
 nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture-range-end stop-shutdown -s none -o nsys_t5_11b_l4_mlm_linear -f true python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 4 \
-       --encoder-num-layers 4 \
-       --decoder-num-layers 4 \
+       --encoder-num-layers 6 \
+       --decoder-num-layers 6 \
        --hidden-size 1024 \
        --num-attention-heads 128 \
        --kv-channels 128 \
        --ffn-hidden-size 65536 \
        --encoder-seq-length 1024 \
        --decoder-seq-length 1024 \
-       --micro-batch-size 2 \
+       --micro-batch-size 1 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
