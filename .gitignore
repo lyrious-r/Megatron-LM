@@ -23,6 +23,7 @@ plopt_debug*/*
 _memory_viz.py
 /*.svg
 /*.html
-/memory_trace
-/memory_debug
-/trace_debug
+/memory_trace*/*
+/memory_debug*/*
+/trace_debug*/*
+/_*.ipynb
