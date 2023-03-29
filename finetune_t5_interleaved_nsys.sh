@@ -27,8 +27,8 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --num-attention-heads 128 \
        --kv-channels 128 \
        --ffn-hidden-size 65536 \
-       --encoder-seq-length 4096 \
-       --decoder-seq-length 4096 \
+       --encoder-seq-length 1024 \
+       --decoder-seq-length 1024 \
        --micro-batch-size 8 \
        --global-batch-size 128 \
        --max-position-embeddings 8192 \

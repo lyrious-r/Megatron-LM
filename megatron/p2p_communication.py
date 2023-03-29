@@ -211,12 +211,16 @@ def _communicate(tensor_send_next, tensor_send_prev, recv_prev, recv_next,
                                                  requires_grad=requires_grad,
                                                  device=torch.cuda.current_device(),
                                                  dtype=dtype))
+    else:
+        tensor_recv_prevs = [None] * len(recv_prev_chunk_shapes)
     if recv_next:
         for recv_next_chunk_shape in recv_next_chunk_shapes:
             tensor_recv_nexts.append(torch.empty(recv_next_chunk_shape,
                                                  requires_grad=requires_grad,
                                                  device=torch.cuda.current_device(),
                                                  dtype=dtype))
+    else:
+        tensor_recv_nexts = [None] * len(recv_next_chunk_shapes)
 
     # Split tensor into smaller chunks if using scatter-gather optimization.
     if not override_scatter_gather_tensors_in_pipeline and \
@@ -455,8 +459,8 @@ def send_forward_backward_recv_forward_backward(
         recv_prev=recv_prev,
         recv_next=recv_next,
         tensor_shape=tensor_shape,
-        receive_prev_shape=receive_prev_shape,
-        receive_next_shape=receive_next_shape)
+        recv_prev_shape=receive_prev_shape,
+        recv_next_shape=receive_next_shape)
     if timers is not None:
         timers('forward-backward-send-forward-backward-recv').stop()
     return input_tensor, output_tensor_grad

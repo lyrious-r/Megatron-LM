@@ -15,6 +15,30 @@ from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.model import Float16Module
 from megatron.model import ModelType
 
+DEBUG_PRINT = False
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_compute(*args, **kwargs):
+    if DEBUG_PRINT:
+        print(bcolors.OKBLUE + ' '.join([str(a) for a in args]) + bcolors.ENDC, **kwargs)
+
+def print_comm_start(*args, **kwargs):
+    if DEBUG_PRINT:
+        print(bcolors.OKCYAN + ' '.join([str(a) for a in args]) + bcolors.ENDC, **kwargs)
+
+def print_comm_end(*args, **kwargs):
+    if DEBUG_PRINT:
+        print(bcolors.OKGREEN + ' '.join([str(a) for a in args]) + bcolors.ENDC, **kwargs)
 
 def get_forward_backward_func():
     args = get_args()
@@ -263,7 +287,7 @@ def forward_backward_no_pipelining(forward_step_func,
     return forward_data_store
 
 
-def get_tensor_shapes_interleaved(chunk_id, model_type):
+def get_recv_shapes_interleaved(chunk_id, model_type, is_prev):
     # Determine right tensor sizes (based on position of rank with respect to split
     # rank) and model size.
     # Send two tensors if model is T5 and rank is in decoder stage:
@@ -286,7 +310,11 @@ def get_tensor_shapes_interleaved(chunk_id, model_type):
         else:
             decoder_seq_length = args.decoder_seq_length
 
+        rank = mpu.get_pipeline_model_parallel_rank()
         if chunk_id < args.virtual_pipeline_model_parallel_size // 2:
+            tensor_shapes.append((seq_length, args.micro_batch_size, args.hidden_size))
+        elif chunk_id == args.virtual_pipeline_model_parallel_size // 2 and rank == 0 and is_prev:
+            # first decoder layer, only receives encoder output
             tensor_shapes.append((seq_length, args.micro_batch_size, args.hidden_size))
         else:
             tensor_shapes.append((decoder_seq_length, args.micro_batch_size, args.hidden_size))
@@ -460,9 +488,7 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                     len(output_tensors[model_chunk_id]):
                 input_tensors[model_chunk_id].append(None)
         input_tensor = input_tensors[model_chunk_id][-1]
-        print("Rank {}: running on model chunk {}".format(rank, model_chunk_id))
-        # print("Rank {}: input tensors: {}".format(rank, input_tensors))
-        print("Rank {}: input tensor (at chunk id {}) is {}".format(rank, model_chunk_id, _tensor_shape_to_str(input_tensor)))
+        print_compute("Rank {}: FW - running microbatch {} on model chunk {}.".format(rank, microbatch_id, model_chunk_id))
         with _annotate_microbatch(microbatch_id, model_chunk_id, is_forward=True):
             output_tensor = forward_step(forward_step_func,
                                         data_iterator[model_chunk_id],
@@ -491,10 +517,18 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
 
         if mpu.is_pipeline_last_stage():
             if len(output_tensor_grads[model_chunk_id]) == 0:
-                output_tensor_grads[model_chunk_id].append(None)
+                if model_chunk_id >= args.virtual_pipeline_model_parallel_size // 2:
+                    print_compute("Rank {}, appending [None, None] to output_tensor_grads for model chunk {}.".format(rank, model_chunk_id))
+                    output_tensor_grads[model_chunk_id].append([None, None])
+                else:
+                    print_compute("Rank {}, appending None to output_tensor_grads for model chunk {}.".format(rank, model_chunk_id))
+                    output_tensor_grads[model_chunk_id].append(None)
         input_tensor = input_tensors[model_chunk_id].pop(0)
         output_tensor = output_tensors[model_chunk_id].pop(0)
         output_tensor_grad = output_tensor_grads[model_chunk_id].pop(0)
+        print_compute("Rank {}: BW - running microbatch {} on model chunk {}, out tensor shape: {}, out grad shape: {}.".format(rank, microbatch_id, model_chunk_id,
+                                                                                                                                _tensor_shape_to_str(output_tensor),
+                                                                                                                                _tensor_shape_to_str(output_tensor_grad)))
         with _annotate_microbatch(microbatch_id, model_chunk_id, is_forward=False):
             input_tensor_grad = \
                 backward_step(optimizer,
@@ -508,9 +542,10 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
 
     # Run warmup forward passes.
     mpu.set_virtual_pipeline_model_parallel_rank(0)
-    tensor_shapes = get_tensor_shapes_interleaved(0, model_type)
-    print("Rank {}: Recv forward: {}".format(rank, tensor_shapes), flush=True)
+    tensor_shapes = get_recv_shapes_interleaved(0, model_type, True)
+    print_comm_start("Rank {}: Before warmup, recv forward: {} started".format(rank, tensor_shapes), flush=True)
     input_tensors[0].append(recv_forward(tensor_shapes, timers=timers))
+    print_comm_end("Rank {}: Before warmup, recv forward: {} ended".format(rank, tensor_shapes), flush=True)
     for k in range(num_warmup_microbatches):
         output_tensor = forward_step_helper(k)
 
@@ -522,10 +557,7 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                 recv_prev = False
         if k == (num_microbatches - 1):
             recv_prev = False
-        if recv_prev:
-            recv_prev_shapes = get_tensor_shapes_interleaved(next_forward_model_chunk_id, model_type)
-        else:
-            recv_prev_shapes = None
+        recv_prev_shapes = get_recv_shapes_interleaved(next_forward_model_chunk_id, model_type, True)
         # Don't send tensor downstream if on last stage.
         if mpu.is_pipeline_last_stage():
             output_tensor = None
@@ -538,29 +570,36 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
             recv_next = True
             if mpu.is_pipeline_last_stage(ignore_virtual=True):
                 recv_next = False
-            if recv_next:
-                next_chunk_id = get_model_chunk_id(0, forward=False)
-                recv_next_shapes = get_tensor_shapes_interleaved(next_chunk_id, model_type)
-            else:
-                recv_next_shapes = None
-            print("Rank {}: Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {}".format(
+            next_chunk_id = get_model_chunk_id(0, forward=False)
+            recv_next_shapes = get_recv_shapes_interleaved(next_chunk_id, model_type, False)
+            print_comm_start("Rank {}: Warm up - Microbatch {}, Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {} started.".format(
                 rank,
+                k,
                 _tensor_shape_to_str(output_tensor),
                 _tensor_shape_to_str(input_tensor_grad),
-                recv_prev_shapes,
-                recv_next_shapes
+                recv_prev_shapes if recv_prev else None,
+                recv_next_shapes if recv_next else None,
                 ), flush=True)
             input_tensor, output_tensor_grad = \
                 p2p_communication.send_forward_backward_recv_forward_backward(
                         output_tensor, input_tensor_grad,
                         recv_prev=recv_prev, recv_next=recv_next,
-                        receive_prev_shapes=recv_prev_shapes,
-                        receive_next_shapes=recv_next_shapes,
+                        receive_prev_shape=recv_prev_shapes,
+                        receive_next_shape=recv_next_shapes,
                         timers=timers)
+            print_comm_end("Rank {}: Warm up - Microbatch {}, Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {} ended.".format(
+                rank,
+                k,
+                _tensor_shape_to_str(output_tensor),
+                _tensor_shape_to_str(input_tensor_grad),
+                recv_prev_shapes if recv_prev else None,
+                recv_next_shapes if recv_next else None,
+                ), flush=True)
             output_tensor_grads[num_model_chunks-1].append(output_tensor_grad)
         else:
-            print("Rank {}: Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {}".format(
+            print_comm_start("Rank {}: Warm up - Microbatch {}, Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {} started.".format(
                 rank,
+                k,
                 _tensor_shape_to_str(output_tensor),
                 None,
                 recv_prev_shapes,
@@ -571,7 +610,14 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                     output_tensor, recv_prev=recv_prev,
                     tensor_shape=recv_prev_shapes,
                     timers=timers)
-        print("Rank {}: next forward model chunk id: {}".format(rank, next_forward_model_chunk_id), flush=True)
+            print_comm_end("Rank {}: Warm up - Microbatch {}, Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {} ended.".format(
+                rank,
+                k,
+                _tensor_shape_to_str(output_tensor),
+                None,
+                recv_prev_shapes,
+                None,
+                ), flush=True)
         input_tensors[next_forward_model_chunk_id].append(input_tensor)
         if output_tensor is not None:
             deallocate_output_tensor(output_tensor[0])
@@ -614,10 +660,7 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
         else:
             next_forward_model_chunk_id = get_model_chunk_id(forward_k + 1,
                                                              forward=True)
-        if recv_prev:
-            recv_prev_shapes = get_tensor_shapes_interleaved(next_forward_model_chunk_id, model_type)
-        else:
-            recv_prev_shapes = None
+        recv_prev_shapes = get_recv_shapes_interleaved(next_forward_model_chunk_id, model_type, True)
 
         recv_next = True
         if mpu.is_pipeline_last_stage(ignore_virtual=True):
@@ -630,21 +673,20 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
         else:
             next_backward_model_chunk_id = get_model_chunk_id(backward_k + 1,
                                                               forward=False)
-        if recv_next:
-            recv_next_shapes = get_tensor_shapes_interleaved(next_backward_model_chunk_id, model_type)
-        else:
-            recv_next_shapes = None
+        recv_next_shapes = get_recv_shapes_interleaved(next_backward_model_chunk_id, model_type, False)
 
         # If last iteration, don't receive; we already received one extra
         # before the start of the for loop.
         if k == (num_microbatches_remaining - 1):
             recv_prev = False
-        print("Rank {}: Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {}".format(
+        print_comm_start("Rank {}: 1F1B - forward k: {}, backward k: {}, Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {}, started.".format(
             rank,
+            forward_k,
+            backward_k,
             _tensor_shape_to_str(output_tensor),
             _tensor_shape_to_str(input_tensor_grad),
-            recv_prev_shapes,
-            recv_next_shapes
+            recv_prev_shapes if recv_prev else None,
+            recv_next_shapes if recv_next else None,
             ), flush=True)
         # Communicate tensors.
         input_tensor, output_tensor_grad = \
@@ -654,6 +696,15 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                     receive_prev_shape=recv_prev_shapes,
                     receive_next_shape=recv_next_shapes,
                     timers=timers)
+        print_comm_end("Rank {}: 1F1B - forward k: {}, backward k: {}, Send next: {}, Send prev: {}, Recv prev: {}, Recv next: {}, ended.".format(
+            rank,
+            forward_k,
+            backward_k,
+            _tensor_shape_to_str(output_tensor),
+            _tensor_shape_to_str(input_tensor_grad),
+            recv_prev_shapes if recv_prev else None,
+            recv_next_shapes if recv_next else None,
+            ), flush=True)
         if output_tensor is not None:
             deallocate_output_tensor(output_tensor[0])
 
@@ -669,13 +720,17 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
     if not forward_only:
         if all_warmup_microbatches:
             recv_bw_chunk_id = get_model_chunk_id(num_microbatches_remaining, forward=False)
-            recv_shapes = get_tensor_shapes_interleaved(recv_bw_chunk_id, model_type)
-            print("Rank {}: recv backward: {}".format(
+            recv_shapes = get_recv_shapes_interleaved(recv_bw_chunk_id, model_type, True)
+            print_comm_start("Rank {}: recv backward: {} started.".format(
                 rank,
                 recv_shapes
                 ), flush=True)
             output_tensor_grads[num_model_chunks-1].append(
                 p2p_communication.recv_backward(recv_shapes, timers=timers))
+            print_comm_end("Rank {}: recv backward: {} ended.".format(
+                rank,
+                recv_shapes
+                ), flush=True)
         for k in range(num_microbatches_remaining, num_microbatches):
             input_tensor_grad = backward_step_helper(k)
             next_backward_model_chunk_id = get_model_chunk_id(k+1, forward=False)
@@ -686,10 +741,10 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
             if k == (num_microbatches - 1):
                 recv_next = False
             if recv_next:
-                recv_next_shapes = get_tensor_shapes_interleaved(next_backward_model_chunk_id, model_type)
+                recv_next_shapes = get_recv_shapes_interleaved(next_backward_model_chunk_id, model_type, False)
             else:
                 recv_next_shapes = None
-            print("Rank {}: Send BW: {}, Recv BW: {}".format(
+            print_comm_start("Rank {}: Send BW: {}, Recv BW: {} started.".format(
                 rank,
                 _tensor_shape_to_str(input_tensor_grad),
                 recv_next_shapes
@@ -699,6 +754,11 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                     input_tensor_grad, recv_next=recv_next,
                     tensor_shape=recv_next_shapes,
                     timers=timers))
+            print_comm_end("Rank {}: Send BW: {}, Recv BW: {} ended.".format(
+                rank,
+                _tensor_shape_to_str(input_tensor_grad),
+                recv_next_shapes
+                ), flush=True)
 
     return forward_data_store
 
