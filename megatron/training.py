@@ -863,14 +863,14 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
                 logger.info("Reserved memory: {:.2f} GB".format(
                     reserved_memory / 1024.0 / 1024.0 / 1024.0))
             # torch.cuda.memory._record_memory_history(True)
-            import pickle
-            def oom_observer(device, alloc, device_alloc, device_free):
-                # snapshot right after an OOM happened
-                print('saving allocated state during OOM')
-                snapshot = torch.cuda.memory._snapshot()
-                pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
-            if not args.plopt_custom_allocator:
-                torch._C._cuda_attach_out_of_memory_observer(oom_observer)
+            # import pickle
+            # def oom_observer(device, alloc, device_alloc, device_free):
+            #     # snapshot right after an OOM happened
+            #     print('saving allocated state during OOM')
+            #     snapshot = torch.cuda.memory._snapshot()
+            #     pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
+            # if not args.plopt_custom_allocator:
+            #     torch._C._cuda_attach_out_of_memory_observer(oom_observer)
         if rank == 0:
             logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()
