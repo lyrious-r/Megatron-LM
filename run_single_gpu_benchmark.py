@@ -111,6 +111,11 @@ def parse_args():
     parser.add_argument(
         "--ffn-hidden-size", type=int, default=65536, help="FFN hidden size"
     )
+    parser.add_argument(
+        "--use-flash-attn",
+        action="store_true",
+        help="Use flash attention.",
+    )
 
 
     args = parser.parse_args()
@@ -129,6 +134,7 @@ def run_benchmark(
     kv_channels=128,
     ffn_hidden_size=65536,
     recompute_type="None",
+    use_flash_attn=False,
 ):
     distributed_args = DISTRIBUTED_ARGS.format(MASTER_PORT + device)
     cmd = CMD_TEMPLATE.format(
@@ -151,6 +157,8 @@ def run_benchmark(
             cmd += " --recompute-granularity full --recompute-method uniform"
         else:
             raise ValueError(f"Unknown recompute type {recompute_type}")
+    if use_flash_attn:
+        cmd += " --use-flash-attn"
 
     subprocess.run(cmd, shell=True)
 
@@ -169,4 +177,5 @@ if __name__ == "__main__":
         args.kv_channels,
         args.ffn_hidden_size,
         args.recompute_type,
+        args.use_flash_attn,
     )

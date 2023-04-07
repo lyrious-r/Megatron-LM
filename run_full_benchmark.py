@@ -14,5 +14,6 @@ for mbs in candidate_mbs:
                     enc_seqlen, dec_seqlen, mbs, 
                     output_dir="/root/Megatron-LM/microbench_t5_11b",
                     device=0,
-                    recompute_type=recompute_type
+                    recompute_type=recompute_type,
+                    use_flash_attn=False,
                 )
