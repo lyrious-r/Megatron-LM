@@ -45,6 +45,9 @@ _PIPELINE_GLOBAL_RANKS = None
 # rank when broadcasting weights from src to all other data parallel ranks
 _DATA_PARALLEL_GLOBAL_RANKS = None
 
+# the index of current data parallel group this rank belongs to
+_DATA_PARALLEL_GROUP_RANK = None
+
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
@@ -120,6 +123,7 @@ def initialize_model_parallel(
     # Build the data-parallel groups.
     global _DATA_PARALLEL_GROUP
     global _DATA_PARALLEL_GLOBAL_RANKS
+    global _DATA_PARALLEL_GROUP_RANK
     assert _DATA_PARALLEL_GROUP is None, 'data parallel group is already initialized'
     all_data_parallel_group_ranks = []
     for i in range(pipeline_model_parallel_size):
@@ -132,6 +136,7 @@ def initialize_model_parallel(
             if rank in ranks:
                 _DATA_PARALLEL_GROUP = group
                 _DATA_PARALLEL_GLOBAL_RANKS = ranks
+                _DATA_PARALLEL_GROUP_RANK = len(all_data_parallel_group_ranks) - 1
 
     # Build the model-parallel groups.
     global _MODEL_PARALLEL_GROUP
@@ -500,6 +505,12 @@ def get_data_parallel_world_size():
 def get_data_parallel_rank():
     """Return my rank for the data parallel group."""
     return torch.distributed.get_rank(group=get_data_parallel_group())
+
+def get_data_parallel_group_rank():
+    """Returns the current data parallel group id."""
+    assert _DATA_PARALLEL_GROUP_RANK is not None, \
+        "Data parallel group is not initialized"
+    return _DATA_PARALLEL_GROUP_RANK
 
 def _set_global_memory_buffer():
     """Initialize global buffer"""

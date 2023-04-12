@@ -2,6 +2,7 @@
 
 """Dataloaders."""
 
+import os
 import random
 import torch
 import numpy as np
@@ -69,15 +70,19 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             args.plopt_intra_node_lat,
             args.plopt_inter_node_lat,
         )
-        buffer_size = args.plopt_prefetch_planner_num_workers \
-                      if mpu.get_pipeline_model_parallel_rank() == 0 else \
-                      args.plopt_prefetch_listener_num_workers
+        buffer_size = args.plopt_prefetch_planner_num_workers
+        listener_workers = args.plopt_prefetch_listener_num_workers
+        dp_size = torch.distributed.get_world_size() // \
+                    (args.tensor_model_parallel_size * 
+                     args.pipeline_model_parallel_size)
         training_spec = TrainingSpec(
             args.plopt_cost_model,
             cluster_spec,
             TransformerModelSpec(args.num_layers, args.num_layers,
                                 args.hidden_size, args.num_attention_heads,
                                 args.ffn_hidden_size, args.kv_channels),
+            dp_size,
+            args.pipeline_model_parallel_size,
             args.plopt_layer_to_device,
             args.plopt_device_memory_limit,
             enable_packing=args.plopt_enable_packing,
@@ -86,14 +91,22 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             round_seqlen_multiple=args.plopt_round_seqlen_multiple,
             limit_rc_type=args.plopt_limit_rc_type,
         )
+        node_rank = torch.distributed.get_rank() // int(os.environ["LOCAL_WORLD_SIZE"])
+        node_size = torch.distributed.get_world_size() // int(os.environ["LOCAL_WORLD_SIZE"])
         joint_dataloader = JointDataLoader(training_spec,
                                         dataset,
                                         dataset.pack_fn,
                                         dataset.constructor_fn,
-                                        virtual_rank=virtual_pp_rank,
-                                        n_virtual_ranks=n_virtual_pp_ranks,
+                                        is_kv_host=torch.distributed.get_rank() == 0,
+                                        node_rank=node_rank,
+                                        node_local_rank=int(os.environ['LOCAL_RANK']),
+                                        node_size = node_size,
+                                        dp_group_rank = mpu.get_data_parallel_group_rank(),
+                                        pp_rank=mpu.get_pipeline_model_parallel_rank(),
+                                        virtual_pp_rank=virtual_pp_rank,
                                         batch_sampler=batch_sampler,
-                                        num_workers=buffer_size,
+                                        num_workers=listener_workers,
+                                        num_preprocess_workers=buffer_size,
                                         pin_memory=True)
         return joint_dataloader
 
