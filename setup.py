@@ -1,10 +1,10 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="megatron.core",
+    name="megatron",
     version="0.1",
-    description="Core components of Megatron.",
+    description="Components of Megatron.",
     packages=find_packages(
-        include=("megatron.core")
+        include=("megatron")
     )
 )

@@ -429,7 +429,10 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     dataset_type='standard_bert',
                                     num_epochs=None,
                                     sort_samples=False,
-                                    pack_samples=False):
+                                    pack_samples=False,
+                                    targets_data_path=None,
+                                    dynamic_batch_size=None,
+                                    offline_build=False):
 
     if len(data_prefix) == 1:
         return _build_train_valid_test_datasets(data_prefix[0],
@@ -443,7 +446,10 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                                 dataset_type=dataset_type,
                                                 num_epochs=num_epochs,
                                                 sort_samples=sort_samples,
-                                                pack_samples=pack_samples)
+                                                pack_samples=pack_samples,
+                                                targets_data_path=targets_data_path,
+                                                dynamic_batch_size=dynamic_batch_size,
+                                                offline_build=offline_build)
     # Blending dataset.
     # Parse the values.
     output = get_datasets_weights_and_num_samples(data_prefix,
@@ -492,7 +498,10 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                      dataset_type='standard_bert',
                                      num_epochs=None,
                                      sort_samples=False,
-                                     pack_samples=False):
+                                     pack_samples=False,
+                                     targets_data_path=None,
+                                     dynamic_batch_size=None,
+                                     offline_build=False):
 
     if dataset_type not in DSET_TYPES:
         raise ValueError("Invalid dataset_type: ", dataset_type)
@@ -509,8 +518,10 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                              skip_warmup)
 
     if dataset_type == DSET_TYPE_T5_SUPERVISED:
-        args = get_args()
-        target_dataset = get_indexed_dataset_(args.targets_data_path,
+        if targets_data_path is None:
+            args = get_args()
+            targets_data_path = args.targets_data_path
+        target_dataset = get_indexed_dataset_(targets_data_path,
                                               data_impl,
                                               skip_warmup)
         assert indexed_dataset.doc_idx.shape[0] == target_dataset.doc_idx.shape[0], \
@@ -570,8 +581,12 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                 kwargs["sort_samples"] = sort_samples
                 kwargs["pack_samples"] = pack_samples
                 if dataset_type == DSET_TYPE_T5_SUPERVISED:
-                    args = get_args()
-                    kwargs["pad_samples"] = not args.dynamic_batchsize
+                    nonlocal dynamic_batch_size
+                    if dynamic_batch_size is None:
+                        args = get_args()
+                        dynamic_batch_size = args.dynamic_batchsize
+                    kwargs["pad_samples"] = not dynamic_batch_size
+                    kwargs["offline_build"] = offline_build
             elif sort_samples or pack_samples:
                 raise ValueError("sort_samples and pack_samples are only supported for T5 dataset type")
 
@@ -787,6 +802,7 @@ def get_samples_mapping_supervised(
                         seed,
                         name,
                         sort_samples=False,
+                        offline_build=False,
 ):
     """Get a list that maps a sample index to a starting sentence index, end sentence index, and length"""
 
@@ -820,68 +836,72 @@ def get_samples_mapping_supervised(
     target_indexmap_filename += '.npy'
 
     # Build the indexed mapping if not exist.
-    if torch.distributed.get_rank() == 0 and \
-       (not os.path.isfile(input_indexmap_filename)) or (not os.path.isfile(target_indexmap_filename)):
-        print(' > WARNING: could not find index map file {} and {}, building '
-              'the indices on rank 0 ...'.format(input_indexmap_filename, target_indexmap_filename))
+    if (not os.path.isfile(input_indexmap_filename)) or (not os.path.isfile(target_indexmap_filename)):
+        should_build = offline_build or torch.distributed.get_rank() == 0
+        print_fn = print if offline_build else print_rank_0
+        if should_build:
+            print_fn(' > WARNING: could not find index map file {} and {}, building '
+                'the indices on rank 0 ...'.format(input_indexmap_filename, target_indexmap_filename))
 
-        # Make sure the types match the helpers input types.
-        assert indexed_dataset.doc_idx.dtype == np.int64
-        assert indexed_dataset.sizes.dtype == np.int32
-        assert target_indexed_dataset.doc_idx.dtype == np.int64
-        assert target_indexed_dataset.sizes.dtype == np.int32
+            # Make sure the types match the helpers input types.
+            assert indexed_dataset.doc_idx.dtype == np.int64
+            assert indexed_dataset.sizes.dtype == np.int32
+            assert target_indexed_dataset.doc_idx.dtype == np.int64
+            assert target_indexed_dataset.sizes.dtype == np.int32
 
-        # Build samples mapping
-        verbose = torch.distributed.get_rank() == 0
-        start_time = time.time()
-        print_rank_0(' > building samples index mapping for {} ...'.format(
-            name))
-        # First compile and then import.
-        from megatron.data import helpers
-        samples_mapping, target_samples_mapping = helpers.build_mapping_supervised(
-            indexed_dataset.doc_idx,
-            indexed_dataset.sizes,
-            target_indexed_dataset.doc_idx,
-            target_indexed_dataset.sizes,
-            num_epochs,
-            max_num_samples,
-            max_seq_length,
-            max_seq_len_dec,
-            seed,
-            verbose,
-            sort_samples)
-        print_rank_0(' > done building samples index maping')
-        np.save(input_indexmap_filename, samples_mapping, allow_pickle=True)
-        print_rank_0(' > saved the input index mapping in {}'.format(
-            input_indexmap_filename))
-        np.save(target_indexmap_filename, target_samples_mapping, allow_pickle=True)
-        print_rank_0(' > saved the target index mapping in {}'.format(
-            target_indexmap_filename))
-        # Make sure all the ranks have built the mapping
-        print_rank_0(' > elasped time to build and save samples mapping '
-                     '(seconds): {:4f}'.format(
-                         time.time() - start_time))
-    # This should be a barrier but nccl barrier assumes
-    # device_index=rank which is not the case for model
-    # parallel case
-    counts = torch.cuda.LongTensor([1])
-    torch.distributed.all_reduce(counts, group=mpu.get_data_parallel_group())
-    torch.distributed.all_reduce(counts, group=mpu.get_pipeline_model_parallel_group())
-    assert counts[0].item() == (
-        torch.distributed.get_world_size() //
-        torch.distributed.get_world_size(group=mpu.get_tensor_model_parallel_group()))
+            # Build samples mapping
+            verbose = torch.distributed.get_rank() == 0 if not offline_build else True
+            start_time = time.time()
+            print_fn(' > building samples index mapping for {} ...'.format(
+                name))
+            # First compile and then import.
+            from megatron.data import helpers
+            samples_mapping, target_samples_mapping = helpers.build_mapping_supervised(
+                indexed_dataset.doc_idx,
+                indexed_dataset.sizes,
+                target_indexed_dataset.doc_idx,
+                target_indexed_dataset.sizes,
+                num_epochs,
+                max_num_samples,
+                max_seq_length,
+                max_seq_len_dec,
+                seed,
+                verbose,
+                sort_samples)
+            print_fn(' > done building samples index maping')
+            np.save(input_indexmap_filename, samples_mapping, allow_pickle=True)
+            print_fn(' > saved the input index mapping in {}'.format(
+                input_indexmap_filename))
+            np.save(target_indexmap_filename, target_samples_mapping, allow_pickle=True)
+            print_fn(' > saved the target index mapping in {}'.format(
+                target_indexmap_filename))
+            # Make sure all the ranks have built the mapping
+            print_fn(' > elasped time to build and save samples mapping '
+                        '(seconds): {:4f}'.format(
+                            time.time() - start_time))
+    if not offline_build:
+        # This should be a barrier but nccl barrier assumes
+        # device_index=rank which is not the case for model
+        # parallel case
+        counts = torch.cuda.LongTensor([1])
+        torch.distributed.all_reduce(counts, group=mpu.get_data_parallel_group())
+        torch.distributed.all_reduce(counts, group=mpu.get_pipeline_model_parallel_group())
+        assert counts[0].item() == (
+            torch.distributed.get_world_size() //
+            torch.distributed.get_world_size(group=mpu.get_tensor_model_parallel_group()))
 
+    print_fn = print if offline_build else print_rank_0
     # Load indexed dataset.
-    print_rank_0(' > loading indexed mapping from {} and {}'.format(
+    print_fn(' > loading indexed mapping from {} and {}'.format(
         input_indexmap_filename, target_indexmap_filename))
     start_time = time.time()
     samples_mapping = np.load(input_indexmap_filename, allow_pickle=True, mmap_mode='r')
     target_samples_mapping = np.load(target_indexmap_filename, allow_pickle=True, mmap_mode='r')
-    print_rank_0('    loaded indexed files in {:3.3f} seconds'.format(
+    print_fn('    loaded indexed files in {:3.3f} seconds'.format(
         time.time() - start_time))
-    print_rank_0('    total number of input samples: {}'.format(
+    print_fn('    total number of input samples: {}'.format(
         samples_mapping.shape[0]))
-    print_rank_0('    total number of target samples: {}'.format(
+    print_fn('    total number of target samples: {}'.format(
         target_samples_mapping.shape[0]))
 
     return samples_mapping, target_samples_mapping

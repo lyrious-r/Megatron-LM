@@ -241,6 +241,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         sort_samples=False,
         pack_samples=False,
         pad_samples=False,
+        offline_build=False,
     ):
 
         # Params to store.
@@ -258,6 +259,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.input_seq_lengths = None
         self.target_seq_lengths = None
         self.adjusted_num_samples = None
+        self.offline_build = offline_build
 
         # Dataset.
         self.input_indexed_dataset = input_indexed_dataset
@@ -278,6 +280,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             self.seed,
             self.name,
             sort_samples=sort_samples,
+            offline_build=offline_build,
         )
 
         if pack_samples:
