@@ -188,8 +188,8 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    config.num_layers = 16
-    config.num_decoder_layers = 16
+    config.num_layers = 8
+    config.num_decoder_layers = 8
     config.n_positions = max(data_args.max_source_length, data_args.max_target_length)
 
     model = AutoModelForSeq2SeqLM.from_config(config)
@@ -222,7 +222,7 @@ def main():
         data_path=data_args.data_path,
         vocab_file=data_args.vocab_file,
         targets_data_path=data_args.target_data_path,
-        train_epochs=training_args.num_train_epochs,
+        train_epochs=int(training_args.num_train_epochs),
         train_iters=training_args.max_steps,
         global_batch_size=data_args.global_batch_size,
         encoder_seq_length=data_args.max_source_length,
