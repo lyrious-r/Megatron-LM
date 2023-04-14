@@ -2,12 +2,12 @@ from dataclasses import dataclass
 from typing import Optional, Any
 
 import torch
-import megatron_plopt
-from megatron_plopt.data.t5_dataset import T5SupervisedDataset, build_supervised_training_sample
-from megatron_plopt.data.data_samplers import MegatronPretrainingOrderedSampler
-from megatron_plopt.data.dataset_utils import build_train_valid_test_datasets
-from megatron_plopt.global_vars import _build_tokenizer, get_tokenizer, _GLOBAL_NUM_MICROBATCHES_CALCULATOR
-from megatron_plopt.microbatches import RawConstantNumMicroBatches
+import megatron
+from megatron.data.t5_dataset import T5SupervisedDataset, build_supervised_training_sample
+from megatron.data.data_samplers import MegatronPretrainingOrderedSampler
+from megatron.data.dataset_utils import build_train_valid_test_datasets
+from megatron.global_vars import _build_tokenizer, get_tokenizer, _GLOBAL_NUM_MICROBATCHES_CALCULATOR
+from megatron.microbatches import RawConstantNumMicroBatches
 
 @dataclass
 class TokenizerArgs:
@@ -117,7 +117,7 @@ def get_train_dataloader(dataset,
     while num_samples % micro_batch_size != 0:
         num_samples += 1
     num_microbatches = num_samples // micro_batch_size
-    megatron_plopt.global_vars._GLOBAL_NUM_MICROBATCHES_CALCULATOR = RawConstantNumMicroBatches(
+    megatron.global_vars._GLOBAL_NUM_MICROBATCHES_CALCULATOR = RawConstantNumMicroBatches(
         num_microbatches
     )
     batch_sampler = MegatronPretrainingOrderedSampler(
