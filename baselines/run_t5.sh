@@ -6,7 +6,9 @@ GRADIENT_CHECKPOINTING=false
 
 export CUDA_VISIBLE_DEVICES=0
 
-nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none -c cudaProfilerApi --capture-range-end stop-shutdown -o t5_11b_2l_single_gpu -f true \
+
+# accelerate launch --config_file megatron_t5_config.yaml run_summarization.py \
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none -c cudaProfilerApi --capture-range-end stop-shutdown -o t5_11b_2l_single_gpu_hf -f true \
 deepspeed run_summarization.py \
     --deepspeed t5_deepspeed.json \
     --model_name_or_path t5-11b \

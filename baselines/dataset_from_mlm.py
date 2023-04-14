@@ -1,8 +1,13 @@
 from dataclasses import dataclass
 from typing import Optional, Any
 
-from megatron.data.dataset_utils import build_train_valid_test_datasets
-from megatron.global_vars import _build_tokenizer, get_tokenizer
+import torch
+import megatron_plopt
+from megatron_plopt.data.t5_dataset import T5SupervisedDataset, build_supervised_training_sample
+from megatron_plopt.data.data_samplers import MegatronPretrainingOrderedSampler
+from megatron_plopt.data.dataset_utils import build_train_valid_test_datasets
+from megatron_plopt.global_vars import _build_tokenizer, get_tokenizer, _GLOBAL_NUM_MICROBATCHES_CALCULATOR
+from megatron_plopt.microbatches import RawConstantNumMicroBatches
 
 @dataclass
 class TokenizerArgs:
@@ -69,6 +74,79 @@ def get_train_ds(data_path, vocab_file,
         dynamic_batch_size=dynamic_batching,
         offline_build=True)
     return train_ds
+
+def get_non_plopt_collate_fn(micro_batch_size, encoder_seq_length, decoder_seq_length, tokenizer):
+    def non_plopt_collate_fn(batch):
+        # pad to max sequence length
+        from torch.utils.data import default_collate
+        result = []
+        current_micro_batch = []
+        assert len(batch) % micro_batch_size == 0, "batch size must be divisible by micro batch size"
+        for sequence in batch:
+            padded_sequence = build_supervised_training_sample(
+                sequence["text_enc"],
+                sequence["text_dec"],
+                encoder_seq_length,
+                decoder_seq_length,
+                tokenizer.pad,
+                tokenizer.bos_token_id,
+                tokenizer.eos_token_id,
+                tokenizer.additional_special_tokens_ids,
+            )
+            current_micro_batch.append(padded_sequence)
+            if len(current_micro_batch) == micro_batch_size:
+                result.append(default_collate(current_micro_batch))
+                current_micro_batch = []
+        assert len(current_micro_batch) == 0, "micro batch size must be divisible by batch size"
+        return result
+    return non_plopt_collate_fn
+
+def get_train_dataloader(dataset,
+                         micro_batch_size,
+                         encoder_seq_length,
+                         data_parallel_rank=0,
+                         data_parallel_size=1,
+                         tokenizer=None,
+                         dynamic_batchsize=True,
+                         global_batch_size=None,
+                         decoder_seq_length=0,
+                         num_workers=0):
+    assert dataset.ordered, "Dataset must be ordered."
+    seqlen_per_sample = encoder_seq_length + decoder_seq_length
+    num_samples = global_batch_size // seqlen_per_sample
+    while num_samples % micro_batch_size != 0:
+        num_samples += 1
+    num_microbatches = num_samples // micro_batch_size
+    megatron_plopt.global_vars._GLOBAL_NUM_MICROBATCHES_CALCULATOR = RawConstantNumMicroBatches(
+        num_microbatches
+    )
+    batch_sampler = MegatronPretrainingOrderedSampler(
+        dataset,
+        total_samples=len(dataset),
+        consumed_samples=0,
+        micro_batch_size=micro_batch_size,
+        data_parallel_rank=data_parallel_rank,
+        data_parallel_size=data_parallel_size,
+        data_sharding=True,
+        dynamic_batchsize=dynamic_batchsize,
+        tokens_per_global_batch=global_batch_size,
+        is_training=True,
+    )
+    if isinstance(dataset, T5SupervisedDataset):
+        collate_fn = get_non_plopt_collate_fn(micro_batch_size=micro_batch_size,
+                                              encoder_seq_length=encoder_seq_length,
+                                              decoder_seq_length=decoder_seq_length,
+                                              tokenizer=tokenizer)
+    else:
+        collate_fn = None
+    torch_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_sampler=batch_sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    return torch_dataloader
 
 @dataclass
 class DataCollatorForPackedDataset:
