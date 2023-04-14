@@ -54,6 +54,18 @@ def print_datetime(string):
     time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print_rank_0('[' + string + '] datetime: {} '.format(time_str))
 
+def set_deepspeed_activation_checkpointing(args):
+    import deepspeed
+    import megatron
+    deepspeed.checkpointing.configure(mpu,
+                            deepspeed_config=args.deepspeed_config)
+
+    import megatron.core.tensor_parallel.random as mpurandom
+    mpurandom.checkpoint = deepspeed.checkpointing.checkpoint
+    mpurandom.get_cuda_rng_tracker = deepspeed.checkpointing.get_cuda_rng_tracker
+    mpurandom.model_parallel_cuda_manual_seed = \
+                    deepspeed.checkpointing.model_parallel_cuda_manual_seed
+
 
 def pretrain(train_valid_test_dataset_provider,
              model_provider,
@@ -119,6 +131,9 @@ def pretrain(train_valid_test_dataset_provider,
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
+
+    if args.deepspeed:
+        set_deepspeed_activation_checkpointing(args)
 
     # Data stuff.
     timers('train/valid/test-data-iterators-setup', log_level=0).start(
@@ -417,6 +432,25 @@ def setup_model_and_optimizer(model_provider_func,
                                        scale_lr_cond, lr_mult)
     opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
 
+    if args.deepspeed:
+        import deepspeed
+        print_rank_0("DeepSpeed is enabled.")
+        assert len(model) == 1, "Interleaved schedule currently do not work" \
+                                "with DeepSpeed."
+
+        # patch mpu to add get_model_parallel_world_size
+        mpu.get_model_parallel_world_size = mpu.get_tensor_model_parallel_world_size
+        model, optimizer, _, opt_param_scheduler = deepspeed.initialize(
+            model=model[0],
+            optimizer=optimizer,
+            args=args,
+            lr_scheduler=opt_param_scheduler,
+            mpu=mpu,
+            dist_init_required=False
+        )
+        model = [model]
+
+
     if args.load is not None:
         timers = get_timers()
         timers('load-checkpoint', log_level=0).start(barrier=True)
@@ -447,11 +481,13 @@ def train_step(forward_step_func, data_iterator,
     args = get_args()
     timers = get_timers()
 
-    # Set grad to zero.
-    if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
-        for partition in model:
-            partition.zero_grad_buffer()
-    optimizer.zero_grad()
+    # deepspeed zeros gradients internally
+    if not args.deepspeed:
+        # Set grad to zero.
+        if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
+            for partition in model:
+                partition.zero_grad_buffer()
+        optimizer.zero_grad()
 
     if args.dynamic_batchsize:
         # the output of data iterator is a list of microbatches,
@@ -483,7 +519,8 @@ def train_step(forward_step_func, data_iterator,
         torch.cuda.empty_cache()
 
     # Reduce gradients.
-    optimizer.reduce_model_grads(args, timers)
+    if not args.deepspeed:
+        optimizer.reduce_model_grads(args, timers)
 
     # Vision gradients.
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
@@ -491,30 +528,36 @@ def train_step(forward_step_func, data_iterator,
                                        (torchDDP, LocalDDP, Float16Module))
         unwrapped_model.cancel_gradients_last_layer(args.curr_iteration)
 
-    # Update parameters.
-    timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
-    timers('optimizer').stop()
+    if not args.deepspeed:
+        # Update parameters.
+        timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
+        update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
+        timers('optimizer').stop()
 
-    # Gather params.
-    if update_successful:
-        optimizer.gather_model_params(args, timers)
+        # Gather params.
+        if update_successful:
+            optimizer.gather_model_params(args, timers)
 
-    # Vision momentum.
-    if args.vision_pretraining and args.vision_pretraining_type == "dino":
-        unwrapped_model = unwrap_model(model[0],
-                                       (torchDDP, LocalDDP, Float16Module))
-        unwrapped_model.update_momentum(args.curr_iteration)
+        # Vision momentum.
+        if args.vision_pretraining and args.vision_pretraining_type == "dino":
+            unwrapped_model = unwrap_model(model[0],
+                                        (torchDDP, LocalDDP, Float16Module))
+            unwrapped_model.update_momentum(args.curr_iteration)
 
-    # Update learning rate.
-    if update_successful:
-        increment = get_num_microbatches() * \
-                    args.micro_batch_size * \
-                    args.data_parallel_size
-        opt_param_scheduler.step(increment=increment)
-        skipped_iter = 0
+        # Update learning rate.
+        if update_successful:
+            increment = get_num_microbatches() * \
+                        args.micro_batch_size * \
+                        args.data_parallel_size
+            opt_param_scheduler.step(increment=increment)
+            skipped_iter = 0
+        else:
+            skipped_iter = 1
     else:
-        skipped_iter = 1
+        model[0].step()
+        skipped_iter = 0
+        grad_norm = 0
+        num_zeros_in_grad = 0
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 2:
@@ -946,7 +989,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             with open(args.per_iter_time_log_path, 'a') as f:
                 f.write(str(timers('iteration-time').elapsed()) + "\n")
         # Logging.
-        loss_scale = optimizer.get_loss_scale().item()
+        if args.deepspeed:
+            loss_scale = optimizer.cur_scale
+        else:
+            loss_scale = optimizer.get_loss_scale().item()
         params_norm = None
         if args.log_params_norm:
             params_norm = calc_params_l2_norm(model)
@@ -1030,7 +1076,10 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             with open(args.per_iter_time_log_path, 'a') as f:
                 f.write(str(timers('iteration-time').elapsed()) + "\n")
         # Logging.
-        loss_scale = optimizer.get_loss_scale().item()
+        if args.deepspeed:
+            loss_scale = optimizer.cur_scale
+        else:
+            loss_scale = optimizer.get_loss_scale().item()
         params_norm = None
         if args.log_params_norm:
             params_norm = calc_params_l2_norm(model)

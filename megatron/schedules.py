@@ -78,7 +78,7 @@ def deallocate_output_tensor(out):
             dtype = out.dtype,
         )
         
-def custom_backward(output, grad_output):
+def custom_backward(output, grad_output, deepspeed_model=None):
     '''Directly call C++ autograd engine.
 
     To make the 'deallocate_output_tensor' (above) optimization work, the C++
@@ -86,6 +86,10 @@ def custom_backward(output, grad_output):
     torch.autograd.backward. Pytorch's 'backward' checks that the output and
     grad have the same shape, while C++'s 'backward' does not.
     '''
+
+    if deepspeed_model is not None:
+        deepspeed_model.backward(output, grad_output)
+        return
 
     assert output.numel() == 1, \
         "output should be pseudo-'freed' in schedule, to optimize memory"
@@ -131,8 +135,13 @@ def forward_step(forward_step_func,
 
     if timers is not None:
         timers('forward-compute', log_level=2).start()
+    if args.deepspeed:
+        from deepspeed.runtime.engine import DeepSpeedEngine
+        unwrap_classes = (torchDDP, LocalDDP, Float16Module, DeepSpeedEngine)
+    else:
+        unwrap_classes = (torchDDP, LocalDDP, Float16Module)
     unwrapped_model = unwrap_model(
-        model, (torchDDP, LocalDDP, Float16Module))
+        model, unwrap_classes)
 
     unwrap_output_tensor = False
     if not isinstance(input_tensor, list):
@@ -171,7 +180,7 @@ def forward_step(forward_step_func,
 
 
 def backward_step(optimizer, input_tensor, output_tensor,
-                  output_tensor_grad, timers):
+                  output_tensor_grad, timers, ds_model=None):
     """Backward step through passed-in output tensor.
 
     If last stage, output_tensor_grad is None, otherwise gradient of loss
@@ -204,8 +213,17 @@ def backward_step(optimizer, input_tensor, output_tensor,
 
     # Backward pass.
     if output_tensor_grad[0] is None:
-        output_tensor = optimizer.scale_loss(output_tensor[0])
-    custom_backward(output_tensor[0], output_tensor_grad[0])
+        # last stage, output_tensor is loss
+        if args.deepspeed:
+            assert ds_model is not None
+            # use deepspeed backward
+            print("Loss: ", output_tensor[0])
+            ds_model.backward(output_tensor[0])
+        else:
+            output_tensor = optimizer.scale_loss(output_tensor[0])
+            custom_backward(output_tensor[0], output_tensor_grad[0])
+    else:
+        custom_backward(output_tensor[0], output_tensor_grad[0])
 
     # Collect the grad of the input_tensor.
     input_tensor_grad = [None]
@@ -268,21 +286,25 @@ def forward_backward_no_pipelining(forward_step_func,
     input_tensor, output_tensor_grad = None, None
     with context_handler():
         for i in range(get_num_microbatches() - 1):
-            output_tensor = forward_step(forward_step_func, data_iterator,
-                                         model, input_tensor, forward_data_store,
-                                         timers, collect_non_loss_data)
+            with torch.cuda.nvtx.range("Forward Microbatch {}".format(i)):
+                output_tensor = forward_step(forward_step_func, data_iterator,
+                                            model, input_tensor, forward_data_store,
+                                            timers, collect_non_loss_data)
             if not forward_only:
-                backward_step(optimizer, input_tensor, output_tensor,
-                              output_tensor_grad, timers)
+                with torch.cuda.nvtx.range("Backward Microbatch {}".format(i)):
+                    backward_step(optimizer, input_tensor, output_tensor,
+                                output_tensor_grad, timers, ds_model=model)
 
     # Run computation for last microbatch out of context handler (want to
     # synchronize gradients).
-    output_tensor = forward_step(forward_step_func, data_iterator,
-                                 model, input_tensor, forward_data_store,
-                                 timers, collect_non_loss_data)
+    with torch.cuda.nvtx.range("Forward Microbatch {}".format(get_num_microbatches() - 1)):
+        output_tensor = forward_step(forward_step_func, data_iterator,
+                                    model, input_tensor, forward_data_store,
+                                    timers, collect_non_loss_data)
     if not forward_only:
-        backward_step(optimizer, input_tensor, output_tensor,
-                      output_tensor_grad, timers)
+        with torch.cuda.nvtx.range("Backward Microbatch {}".format(get_num_microbatches() - 1)):
+            backward_step(optimizer, input_tensor, output_tensor,
+                        output_tensor_grad, timers, ds_model=model)
 
     return forward_data_store
 
@@ -414,8 +436,13 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
 
     args = get_args()
 
+    if args.deepspeed:
+        from deepspeed.runtime.engine import DeepSpeedEngine
+        unwrap_classes = (torchDDP, LocalDDP, Float16Module, DeepSpeedEngine)
+    else:
+        unwrap_classes = (torchDDP, LocalDDP, Float16Module)
     unwrapped_model = unwrap_model(
-        model[0], (torchDDP, LocalDDP, Float16Module))
+        model[0], unwrap_classes)
     model_type = unwrapped_model.model_type
 
     input_tensors = [[] for _ in range(len(model))]
@@ -535,7 +562,8 @@ def forward_backward_pipelining_with_interleaving(forward_step_func,
                             input_tensor,
                             output_tensor,
                             output_tensor_grad,
-                            timers)
+                            timers,
+                            ds_model=model[model_chunk_id])
         if not isinstance(input_tensor_grad, list):
             input_tensor_grad = [input_tensor_grad]
         return input_tensor_grad
@@ -824,8 +852,13 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
     num_microbatches_remaining = \
         num_microbatches - num_warmup_microbatches
 
+    if args.deepspeed:
+        from deepspeed.runtime.engine import DeepSpeedEngine
+        unwrap_classes = (torchDDP, LocalDDP, Float16Module, DeepSpeedEngine)
+    else:
+        unwrap_classes = (torchDDP, LocalDDP, Float16Module)
     unwrapped_model = unwrap_model(
-        model, (torchDDP, LocalDDP, Float16Module))
+        model, unwrap_classes)
     model_type = unwrapped_model.model_type
     rank = mpu.get_pipeline_model_parallel_rank()
     recv_tensor_shapes = get_tensor_shapes(rank-1, model_type)
@@ -905,7 +938,7 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             with _annotate_microbatch("compute", is_forward=False):
                 input_tensor_grad = \
                     backward_step(optimizer, input_tensor, output_tensor,
-                                output_tensor_grad, timers)
+                                output_tensor_grad, timers, ds_model=model)
 
             if last_iteration:
                 input_tensor = None
@@ -929,7 +962,7 @@ def forward_backward_pipelining_without_interleaving(forward_step_func,
             with _annotate_microbatch("compute", is_forward=False):
                 input_tensor_grad = \
                     backward_step(optimizer, input_tensor, output_tensor,
-                                output_tensor_grad, timers)
+                                output_tensor_grad, timers, ds_model=model)
 
             with _annotate_microbatch("send", is_forward=False):
                 send_backward(input_tensor_grad, recv_tensor_shapes, timers=timers)

@@ -6,6 +6,7 @@ import argparse
 import os
 
 import torch
+import deepspeed
 from plopt.pipe.instructions import get_available_rc_types
 
 def parse_args(extra_args_provider=None, ignore_unknown_args=False):
@@ -31,6 +32,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     parser = _add_inference_args(parser)
     parser = _add_transformer_engine_args(parser)
     parser = _add_plopt_args(parser)
+    parser = deepspeed.add_config_arguments(parser)
 
     # Custom arguments.
     if extra_args_provider is not None:

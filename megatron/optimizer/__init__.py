@@ -97,7 +97,9 @@ def get_megatron_optimizer(model,
     #   from the MixedPrecisionOptimizer, which manages any optimizer where
     #   the model params and main params are distinct.
     if args.fp16 or args.bf16 or args.use_distributed_optimizer:
-
+        if args.deepspeed:
+            # we need the raw optimizer for deepspeed init
+            return optimizer
         # Grad scaler:
         #    if loss-scale is provided, instantiate the constant scaler.
         #    if we are using fp16 and loss-scale is not present, use a

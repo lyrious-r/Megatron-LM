@@ -32,7 +32,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --encoder-seq-length 1024 \
        --decoder-seq-length 1024 \
        --micro-batch-size 8 \
-       --global-batch-size 128 \
+       --global-batch-size 32 \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
        --no-scatter-gather-tensors-in-pipeline \
@@ -68,8 +68,8 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --plopt-inter-node-bw 100 \
        --plopt-layer-to-device 0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3 \
        --dynamic-batchsize \
-       --tokens-per-global-batch 16384 \
+       --tokens-per-global-batch 65536 \
        --plopt-prefetch-planner-num-workers 64 \
        --plopt-reserve-all-memory \
        --plopt-custom-allocator \
-       2>&1 | tee log_t5_11b_16l_plopt_linear_gbs16384.txt
+       2>&1 | tee log_t5_11b_16l_plopt_linear_gbs65536.txt
