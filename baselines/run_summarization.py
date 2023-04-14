@@ -24,6 +24,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+import torch
 import datasets
 import transformers
 from transformers import (
@@ -32,6 +33,7 @@ from transformers import (
     HfArgumentParser,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    TrainerCallback,
     set_seed,
 )
 
@@ -122,6 +124,10 @@ class DataTrainingArguments:
             )
         },
     )
+    enable_nsys_profile: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to enable nsys profiling."},
+    )
 
     def __post_init__(self):
         if (
@@ -131,6 +137,19 @@ class DataTrainingArguments:
             and self.max_source_length is None
         ):
             raise ValueError("Need either data_path, vocab_file, global_batch_size or max_source_length.")
+
+class ProfilingCallback(TrainerCallback):
+    def __init__(self, start_iteration=20, stop_iteration=40):
+        self.start_iteration = start_iteration
+        self.stop_iteration = stop_iteration
+        
+    def on_step_begin(self, args, state, control, **kwargs):
+        if state.global_step == self.start_iteration:
+            torch.cuda.cudart().cudaProfilerStart()
+            
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step == self.stop_iteration:
+            torch.cuda.cudart().cudaProfilerStop()
 
 
 def main():
@@ -152,6 +171,12 @@ def main():
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+    if data_args.enable_nsys_profile:
+        logger.warning("Enabling nsys profiling.")
+        callbacks = [ProfilingCallback(start_iteration=20, stop_iteration=40)]
+    else:
+        callbacks = []
 
     if training_args.should_log:
         # The default of training_args.log_level is passive, so we set log level at info here to have that default.
@@ -188,9 +213,10 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    config.num_layers = 8
-    config.num_decoder_layers = 8
+    config.num_layers = 2
+    config.num_decoder_layers = 2
     config.n_positions = max(data_args.max_source_length, data_args.max_target_length)
+    config.use_cache = False
 
     model = AutoModelForSeq2SeqLM.from_config(config)
 
@@ -248,6 +274,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         data_collator=data_collator,
+        callbacks=callbacks,
     )
 
     # Training

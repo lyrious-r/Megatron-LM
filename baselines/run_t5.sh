@@ -1,8 +1,12 @@
 DATA_PATH="/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_document"
 TARGET_DATA_PATH="/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document"
-PER_DEVICE_BATCH_SIZE=1
-GRAD_ACCUM_STEPS=8
+PER_DEVICE_BATCH_SIZE=2
+GRAD_ACCUM_STEPS=1
+GRADIENT_CHECKPOINTING=false
 
+export CUDA_VISIBLE_DEVICES=0
+
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none -c cudaProfilerApi --capture-range-end stop-shutdown -o t5_11b_2l_single_gpu -f true \
 deepspeed run_summarization.py \
     --deepspeed t5_deepspeed.json \
     --model_name_or_path t5-11b \
@@ -10,7 +14,7 @@ deepspeed run_summarization.py \
     --data_path $DATA_PATH \
     --target_data_path $TARGET_DATA_PATH \
     --vocab_file /root/t5-base-vocab.txt \
-    --global_batch_size 65536 \
+    --global_batch_size 4096 \
     --max_source_length 1024 \
     --max_target_length 1024 \
     --do_train true \
@@ -21,4 +25,6 @@ deepspeed run_summarization.py \
     --save_strategy no \
     --fp16 true \
     --dataloader_num_workers 2 \
-    --remove_unused_columns false
+    --gradient_checkpointing $GRADIENT_CHECKPOINTING \
+    --remove_unused_columns false \
+    --enable_nsys_profile true

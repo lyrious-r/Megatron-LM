@@ -28,7 +28,7 @@
         "min_loss_scale": 1
     },
     "zero_optimization": {
-        "stage": 3,
+        "stage": 0,
         "allgather_partitions": true,
         "allgather_bucket_size": 5e8,
         "overlap_comm": true,
@@ -41,8 +41,5 @@
         "stage3_param_persistence_threshold" : 1e6,
         "ignore_unused_parameters": true,
         "round_robin_gradients": false
-    },
-    "activation_checkpointing": {
-        "number_checkpoints": 16
     }
 }

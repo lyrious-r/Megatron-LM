@@ -108,7 +108,6 @@ class DataCollatorForPackedDataset:
     model: Optional[Any] = None
     label_pad_token_id: int = -100
     return_tensors: str = "pt"
-    warned: bool = False
 
     def __call__(self, features, return_tensors=None):
         import torch
@@ -141,8 +140,4 @@ class DataCollatorForPackedDataset:
             decoder_input_ids = self.model.prepare_decoder_input_ids_from_labels(labels=collated_features["labels"])
             collated_features["decoder_input_ids"] = decoder_input_ids
 
-        if not self.warned:
-            for key, tensor in collated_features.items():
-                print("Key: {}, shape: {}".format(key, tensor.shape))
-            self.warned = True
         return collated_features
