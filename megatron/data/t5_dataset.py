@@ -240,7 +240,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         seed,
         sort_samples=False,
         pack_samples=False,
-        pad_samples=False,
+        dynamic_batchsize=True,
         offline_build=False,
     ):
 
@@ -249,7 +249,6 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.seed = seed
         self.sorted = sort_samples
         self.packed = pack_samples
-        self.padded = pad_samples
         self.supervised = True
         self.ordered = True
         self.max_seq_length = max_seq_length
@@ -260,6 +259,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.target_seq_lengths = None
         self.adjusted_num_samples = None
         self.offline_build = offline_build
+        self.dynamic_batchsize = dynamic_batchsize
 
         # Dataset.
         self.input_indexed_dataset = input_indexed_dataset
@@ -408,6 +408,10 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                 result.append(default_collate(current_micro_batch))
                 current_micro_batch = []
         assert len(current_micro_batch) == 0, "micro batch size must be divisible by batch size"
+        if not self.dynamic_batchsize:
+            # directly return a batch
+            assert len(result) == 1
+            return result[0]
         return result
 
     def __getitem__(self, idx):
@@ -434,27 +438,16 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         # np_rng = np.random.RandomState(seed=(self.seed + idx))
-        if self.padded:
-            return build_supervised_training_sample(
-                input_sample,
-                target_sample,
-                self.max_seq_length,
-                self.max_seq_length_dec,
-                self.pad_id,
-                self.bos_id,
-                self.eos_id,
-                self.sentinel_tokens,
-            )
-        else:
-            if self.packed:
-                # run pack fn on the samples
-                input_sample, _ = self.pack_fn(input_sample)
-                input_sample = [input_sample]
-                target_sample, _ = self.pack_fn(target_sample)
-                target_sample = [target_sample]
-            return build_unpadded_sample(
-                input_sample, target_sample, self.max_seq_length, self.max_seq_length_dec
-            )
+        if self.packed:
+            # run pack fn on the samples
+            input_sample, _ = self.pack_fn(input_sample)
+            input_sample = [input_sample]
+            target_sample, _ = self.pack_fn(target_sample)
+            target_sample = [target_sample]
+
+        return build_unpadded_sample(
+            input_sample, target_sample, self.max_seq_length, self.max_seq_length_dec
+        )
 
 
 def build_training_sample(sample, target_seq_length,

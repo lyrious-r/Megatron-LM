@@ -878,7 +878,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
     report_memory_flag = True if not args.plopt_custom_allocator else False
-    rank = mpu.get_pipeline_model_parallel_rank()
+    rank = torch.distributed.get_rank()
+    pp_rank = mpu.get_pipeline_model_parallel_rank()
+    dp_rank = mpu.get_data_parallel_rank()
+    tp_rank = mpu.get_tensor_model_parallel_rank()
 
     if args.debug_dump_memory_trace:
         assert not DEBUG_DUMP_MEMORY_STATS, \
@@ -930,13 +933,13 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             import pickle
             import json
             import os
-            if not os.path.exists('./memory_debug/memory_snapshots/rank_{}'.format(rank)):
-                os.makedirs('./memory_debug/memory_snapshots/rank_{}'.format(rank))
-            with open(f'./memory_debug/memory_snapshots/rank_{rank}/snapshot_iter{iteration}.pickle', 'wb') as f:
+            if not os.path.exists('./memory_debug/memory_snapshots/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank)):
+                os.makedirs('./memory_debug/memory_snapshots/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
+            with open(f'./memory_debug/memory_snapshots/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/snapshot_iter{iteration}.pickle', 'wb') as f:
                 pickle.dump(snapshot, f)
             # get some stats
             resident_tensor_size = get_resident_tensor_size()
-            with open(f'./memory_debug/memory_snapshots/rank_{rank}/stats_iter{iteration}.txt', 'w') as f:
+            with open(f'./memory_debug/memory_snapshots/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/stats_iter{iteration}.txt', 'w') as f:
                 data= {
                     "resident_tensor_size": resident_tensor_size,
                     "memory_stats": torch.cuda.memory_stats(),
@@ -962,9 +965,9 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
                 import os
                 import pickle
-                if not os.path.exists('./memory_trace'.format(rank)):
-                    os.makedirs('./memory_trace'.format(rank))
-                with open(f'./memory_trace/rank_{rank}.pkl', 'wb') as f:
+                if not os.path.exists('./memory_trace'):
+                    os.makedirs('./memory_trace')
+                with open(f'./memory_trace/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}.pkl', 'wb') as f:
                     snapshot = torch.cuda.memory._snapshot()
                     pickle.dump(snapshot, f)
                 torch.distributed.barrier()

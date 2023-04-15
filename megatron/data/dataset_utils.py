@@ -585,7 +585,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                     if dynamic_batch_size is None:
                         args = get_args()
                         dynamic_batch_size = args.dynamic_batchsize
-                    kwargs["pad_samples"] = not dynamic_batch_size
+                        kwargs["dynamic_batchsize"] = dynamic_batch_size
                     kwargs["offline_build"] = offline_build
             elif sort_samples or pack_samples:
                 raise ValueError("sort_samples and pack_samples are only supported for T5 dataset type")

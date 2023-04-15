@@ -113,7 +113,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
         return joint_dataloader
 
     # Torch dataloader.
-    if isinstance(dataset, T5SupervisedDataset) and args.dynamic_batchsize:
+    if isinstance(dataset, T5SupervisedDataset):
         # dynamic microbatching
         collate_fn = dataset.non_plopt_collate_fn
     else:
@@ -394,7 +394,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         g = torch.Generator()
         g.manual_seed(epoch)
         if self._dynamic_batchsize:
-            # assume dataset is pre_divided among data parallel groups
+            assert self.use_plopt, "Please use precalculated batch size for packed training."
             start_idx = current_epoch_samples
             while start_idx < self.total_samples:
                 next_batch_end_idx = self._get_next_batch(start_idx, self.total_samples)
