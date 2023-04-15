@@ -217,7 +217,6 @@ def backward_step(optimizer, input_tensor, output_tensor,
         if args.deepspeed:
             assert ds_model is not None
             # use deepspeed backward
-            print("Loss: ", output_tensor[0])
             ds_model.backward(output_tensor[0])
         else:
             output_tensor = optimizer.scale_loss(output_tensor[0])

@@ -54,18 +54,6 @@ def print_datetime(string):
     time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print_rank_0('[' + string + '] datetime: {} '.format(time_str))
 
-def set_deepspeed_activation_checkpointing(args):
-    import deepspeed
-    import megatron
-    deepspeed.checkpointing.configure(mpu,
-                            deepspeed_config=args.deepspeed_config)
-
-    import megatron.core.tensor_parallel.random as mpurandom
-    mpurandom.checkpoint = deepspeed.checkpointing.checkpoint
-    mpurandom.get_cuda_rng_tracker = deepspeed.checkpointing.get_cuda_rng_tracker
-    mpurandom.model_parallel_cuda_manual_seed = \
-                    deepspeed.checkpointing.model_parallel_cuda_manual_seed
-
 
 def pretrain(train_valid_test_dataset_provider,
              model_provider,
@@ -131,9 +119,6 @@ def pretrain(train_valid_test_dataset_provider,
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
-
-    if args.deepspeed:
-        set_deepspeed_activation_checkpointing(args)
 
     # Data stuff.
     timers('train/valid/test-data-iterators-setup', log_level=0).start(
@@ -335,6 +320,9 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             mpu.get_pipeline_model_parallel_rank(),
             sum([sum([p.nelement() for p in model_module.parameters()])
                  for model_module in model])), flush=True)
+
+    if args.deepspeed:
+        return model
 
     # GPU allocation.
     for model_module in model:
