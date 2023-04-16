@@ -46,7 +46,7 @@ from .pipeline_executor import get_pipeline_executor
 
 from plopt.memory_opt.utils import reserve_full_memory
 
-DEBUG_DUMP_MEMORY_STATS = False
+DEBUG_DUMP_MEMORY_STATS = True
 
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
@@ -847,6 +847,7 @@ def get_resident_tensors():
 def get_resident_tensor_size():
     import gc
     total_size = 0
+    gc.collect()
     for obj in gc.get_objects():
         try:
             if torch.is_tensor(obj):
@@ -887,7 +888,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
         assert not DEBUG_DUMP_MEMORY_STATS, \
             "Cannot use both debug_dump_memory_trace and " \
             "debug_dump_memory_stats"
-    if DEBUG_DUMP_MEMORY_STATS:
+    if DEBUG_DUMP_MEMORY_STATS and not args.plopt_custom_allocator:
         torch.cuda.memory._record_memory_history(True)
     while iteration < args.train_iters:
         if iteration == 1:
@@ -928,26 +929,53 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             logger.info("Emptying cuda cache...")
             torch.cuda.empty_cache()
         if DEBUG_DUMP_MEMORY_STATS:
-            torch.cuda.synchronize()
-            snapshot = torch.cuda.memory._snapshot()
             import pickle
             import json
             import os
-            if not os.path.exists('./memory_debug/memory_snapshots/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank)):
-                os.makedirs('./memory_debug/memory_snapshots/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
-            with open(f'./memory_debug/memory_snapshots/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/snapshot_iter{iteration}.pickle', 'wb') as f:
-                pickle.dump(snapshot, f)
-            # get some stats
-            resident_tensor_size = get_resident_tensor_size()
-            with open(f'./memory_debug/memory_snapshots/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/stats_iter{iteration}.txt', 'w') as f:
-                data= {
-                    "resident_tensor_size": resident_tensor_size,
-                    "memory_stats": torch.cuda.memory_stats(),
-                }
-                json.dump(data, f)
+
+            torch.cuda.synchronize()
+            if args.plopt_custom_allocator:
+                from plopt.memory_opt.cuda_caching_allocator import get_allocator
+                allocator = get_allocator()
+                # bug, disable until fixed
+                # pickled_snapshot = allocator.get_memory_snapshot()
+                # snapshot = pickle.loads(pickled_snapshot)
+
+                # get some stats
+                resident_tensor_size = get_resident_tensor_size()
+                if not os.path.exists('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank)):
+                    os.makedirs('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
+                with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/stats_iter{iteration}.txt', 'w') as f:
+                    data= {
+                        "resident_tensor_size": resident_tensor_size,
+                        "peak_allocated_memory": allocator.peak_allocated_cuda_memory(),
+                        "peak_reserved_memory": allocator.peak_reserved_cuda_memory(),
+                        "current_allocated_memory": allocator.current_allocated_cuda_memory(),
+                        "current_reserved_memory": allocator.current_reserved_cuda_memory(),
+                    }
+                    json.dump(data, f)
+            else:
+                snapshot = torch.cuda.memory._snapshot()
+
+                if not os.path.exists('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank)):
+                    os.makedirs('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
+                with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/snapshot_iter{iteration}.pickle', 'wb') as f:
+                    pickle.dump(snapshot, f)
+                # get some stats
+                resident_tensor_size = get_resident_tensor_size()
+                with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/stats_iter{iteration}.txt', 'w') as f:
+                    data= {
+                        "resident_tensor_size": resident_tensor_size,
+                        "memory_stats": torch.cuda.memory_stats(),
+                    }
+                    json.dump(data, f)
             # reset peak
-            torch.cuda.memory.reset_peak_memory_stats()
-            torch.cuda.memory.reset_accumulated_memory_stats()
+            if args.plopt_custom_allocator:
+                allocator.reset_peak_stats()
+                allocator.reset_accumulated_stats()
+            else:
+                torch.cuda.memory.reset_peak_memory_stats()
+                torch.cuda.memory.reset_accumulated_memory_stats()
         if args.profile_with_nsys:
             from plopt.utils.logger import logger
             if iteration - orig_iteration == args.nsys_profile_warmup:
