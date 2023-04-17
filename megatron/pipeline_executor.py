@@ -14,6 +14,40 @@ from megatron.model import Float16Module, ModelType
 from megatron.core import mpu
 from megatron.schedules import forward_step, backward_step, deallocate_output_tensor
 
+DEBUG_DUMP_MEMORY_STATS = True
+
+def _dump_memory_stats(instr_id: int):
+    if not DEBUG_DUMP_MEMORY_STATS:
+        return
+    import os
+    import json
+    args = get_args()
+    pp_rank = mpu.get_pipeline_model_parallel_rank()
+    dp_rank = mpu.get_data_parallel_rank()
+    tp_rank = mpu.get_tensor_model_parallel_rank()
+    if not os.path.exists('./memory_debug/dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank)):
+        os.makedirs('./memory_debug/dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank))
+    if args.plopt_custom_allocator:
+        from plopt.memory_opt.cuda_caching_allocator import get_allocator
+        allocator = get_allocator()
+
+        with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/microbatch_stats/iter{args.curr_iteration}_instr{instr_id}.txt', 'w') as f:
+            data= {
+                "peak_allocated_memory": allocator.peak_allocated_cuda_memory(),
+                "peak_reserved_memory": allocator.peak_reserved_cuda_memory(),
+                "peak_requested_memory": allocator.peak_requested_cuda_memory(),
+                "current_allocated_memory": allocator.current_allocated_cuda_memory(),
+                "current_reserved_memory": allocator.current_reserved_cuda_memory(),
+                "current_requested_memory": allocator.current_requested_cuda_memory(),
+            }
+            json.dump(data, f)
+    else:
+        with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/microbatch_stats/iter{args.curr_iteration}_instr{instr_id}.txt', 'w') as f:
+            data= {
+                "memory_stats": torch.cuda.memory_stats(),
+            }
+            json.dump(data, f)
+
 def recompute_level_to_flag(recompute_lvl: RecomputeMethod):
     if recompute_lvl == RecomputeMethod.NONE:
         return None
@@ -166,6 +200,7 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
         # we only fill the first len(outputs) buffers
         for buffer_id, output in zip(buffer_ids[:len(outputs)], outputs):
             exec.buffer_slots[buffer_id] = output
+        _dump_memory_stats(exec.instr_index)
     return _handle_forward
 
 def _create_backward_handler(optimizer):
@@ -215,6 +250,7 @@ def _create_backward_handler(optimizer):
         # we only fill the first len(outputs) buffers
         for buffer_id, output in zip(buffer_ids[:len(input_tensor_grad)], input_tensor_grad):
             exec.buffer_slots[buffer_id] = output
+        _dump_memory_stats(exec.instr_index)
     return _handle_backward
 
 _comm_instr_key_map = {

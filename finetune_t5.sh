@@ -13,7 +13,7 @@ DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_docu
 TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
-export PLOPT_DEBUG=INFO
+export PLOPT_DEBUG=DEBUG
 export PLOPT_LOGGING_DEBUG_DIR=/root/Megatron-LM/plopt_debug
 export NCCL_DEBUG=VERSION
 
@@ -36,7 +36,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --max-position-embeddings 8192 \
        --no-async-tensor-model-parallel-allreduce \
        --no-scatter-gather-tensors-in-pipeline \
-       --train-iters 500 \
+       --train-iters 100 \
        --train-epochs 1 \
        --lr-decay-iters 100 \
        --data-path $DATA_PATH \
