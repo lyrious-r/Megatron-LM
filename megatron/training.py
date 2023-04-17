@@ -654,7 +654,7 @@ def plopt_train_step(data_iterator, forward_step_func,
         microbatch, execution_plan = next(data_iterator)
         microbatch_iterator = iter(microbatch)
     executor = get_pipeline_executor(forward_step_func, microbatch_iterator, model, optimizer)
-    executor.execute(execution_plan)
+    executor.execute(execution_plan, args.curr_iteration)
     losses_reduced = executor.forward_data_store
     timers('forward-backward').stop()
 
@@ -972,6 +972,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     pp_rank = mpu.get_pipeline_model_parallel_rank()
     dp_rank = mpu.get_data_parallel_rank()
     tp_rank = mpu.get_tensor_model_parallel_rank()
+
+    # before training starts, launch an allreduce to init NCCL communicator
+    torch.distributed.all_reduce(torch.zeros(1).cuda())
+    torch.distributed.all_reduce(torch.zeros(1).cuda(), group=mpu.get_model_parallel_group())
 
     if args.debug_dump_memory_trace:
         assert not DEBUG_DUMP_MEMORY_STATS, \

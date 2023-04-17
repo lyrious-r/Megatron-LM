@@ -131,7 +131,6 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
         # set recompute flag
         flag = recompute_level_to_flag(exec.execution_plan.recompute_method)
         mpu.set_recomputation_level(flag)
-        exec.logger.debug("Recompute level: {}".format(flag))
         if args.virtual_pipeline_model_parallel_size is not None:
             # interleaved scheduling
             # needs to call set_virtual_pipeline_model_parallel_rank before

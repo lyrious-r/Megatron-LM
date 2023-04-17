@@ -63,7 +63,7 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --use-plopt \
        --plopt-cost-model /root/Megatron-LM/t5_11b_cm.pkl \
        --plopt-device-to-node 0:0,1:0,2:0,3:0 \
-       --plopt-device-memory-limit 28000 \
+       --plopt-device-memory-limit 33000 \
        --plopt-intra-node-bw 4800 \
        --plopt-inter-node-bw 100 \
        --plopt-layer-to-device 0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3 \
