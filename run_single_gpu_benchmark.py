@@ -135,6 +135,7 @@ def run_benchmark(
     ffn_hidden_size=65536,
     recompute_type="None",
     use_flash_attn=False,
+    log_file=None,
 ):
     distributed_args = DISTRIBUTED_ARGS.format(MASTER_PORT + device)
     cmd = CMD_TEMPLATE.format(
@@ -160,7 +161,11 @@ def run_benchmark(
     if use_flash_attn:
         cmd += " --use-flash-attn"
 
-    subprocess.run(cmd, shell=True)
+    if log_file:
+        with open(log_file, "a") as f:
+            subprocess.run(cmd, shell=True, stderr=f, stdout=f)
+    else:
+        subprocess.run(cmd, shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 
 if __name__ == "__main__":

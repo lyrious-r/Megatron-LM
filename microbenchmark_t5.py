@@ -216,9 +216,8 @@ def get_fw_hook(stop_name, start_name):
         memory_after_fw = torch.cuda.memory_allocated()
         peak_memory_after_fw = torch.cuda.max_memory_allocated()
         stat_recorder.add(f"memory_after_{stop_name}", memory_after_fw / 1e6)
-        stat_recorder.add(
-            f"peak_memory_after_{stop_name}", peak_memory_after_fw / 1e6
-        )
+        stat_recorder.add(f"peak_memory_after_{stop_name}", peak_memory_after_fw / 1e6)
+        torch.cuda.reset_max_memory_allocated()
         if start_name is not None:
             start_timer(timers, f"forward_{start_name}")
             torch.cuda.nvtx.range_push(f"forward_{start_name}")
@@ -417,11 +416,8 @@ def benchmark_forward_backward_no_pipelining(
     input_tensor, output_tensor_grad = None, None
 
     memory_before_forward = torch.cuda.memory_allocated()
-    peak_memory_before_forward = torch.cuda.max_memory_allocated()
+    torch.cuda.reset_max_memory_allocated()
     stat_recorder.add("memory_before_forward", memory_before_forward / 1e6)
-    stat_recorder.add(
-        "peak_memory_before_forward", peak_memory_before_forward / 1e6
-    )
     if iteration == BENCHMARK_START_ITER:
         torch.cuda.cudart().cudaProfilerStart()
     start_timer(timers, "forward_total")
@@ -445,12 +441,6 @@ def benchmark_forward_backward_no_pipelining(
     )
     get_fw_hook("postprocess", None)()
     stop_timer(timers, "forward_total")
-    memory_after_forward = torch.cuda.memory_allocated()
-    peak_memory_after_forward = torch.cuda.max_memory_allocated()
-    stat_recorder.add("memory_after_dec_forward", memory_after_forward / 1e6)
-    stat_recorder.add(
-        "peak_memory_after_dec_forward", peak_memory_after_forward / 1e6
-    )
     if not forward_only:
         start_timer(timers, "backward_total")
         start_timer(timers, "backward_postprocess")
@@ -480,11 +470,7 @@ def benchmark_forward_backward_no_pipelining(
         torch.cuda.nvtx.range_pop()
         stop_timer(timers, "backward_total")
         memory_after_backward = torch.cuda.memory_allocated()
-        peak_memory_after_backward = torch.cuda.max_memory_allocated()
         stat_recorder.add("memory_after_backward", memory_after_backward / 1e6)
-        stat_recorder.add(
-            "peak_memory_after_backward", peak_memory_after_backward / 1e6
-        )
         if memory_trace_enabled:
             torch.cuda.memory._record_memory_history(False)
             memory_trace_enabled = False
@@ -714,26 +700,37 @@ def generate_report(n_iters, save_path=None):
     _get_stats_and_print("optimizer_state_size")
     _cprint("Activations ", "-")
     _get_stats_and_print("memory_before_forward")
-    # _get_stats_and_print("memory_after_enc_forward")
-    # _get_stats_and_print("memory_after_dec_forward")
     _get_stats_and_print("memory_after_backward")
     _get_stats_and_print_difference(
         "memory_after_enc_embedding", "memory_before_forward", "enc_embedding_activation"
     )
     _get_stats_and_print_difference(
+        "peak_memory_after_enc_embedding", "memory_before_forward", "peak_enc_embedding_activation"
+    )
+    _get_stats_and_print_difference(
         "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation", multiplier= 1 / N_ENCODER_LAYERS
+    )
+    _get_stats_and_print_difference(
+        "peak_memory_after_encoder", "memory_after_enc_embedding", "peak_encoder_activation"
     )
     _get_stats_and_print_difference(
         "memory_after_dec_embedding", "memory_after_encoder", "dec_embedding_activation"
     )
     _get_stats_and_print_difference(
+        "peak_memory_after_dec_embedding", "memory_after_encoder", "peak_dec_embedding_activation"
+    )
+    _get_stats_and_print_difference(
         "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation", multiplier= 1 / N_DECODER_LAYERS
+    )
+    _get_stats_and_print_difference(
+        "peak_memory_after_decoder", "memory_after_dec_embedding", "peak_decoder_activation"
     )
     _get_stats_and_print_difference(
         "memory_after_postprocess", "memory_after_decoder", "postprocess_activation"
     )
-    _get_stats_and_print("peak_memory_before_forward")
-    _get_stats_and_print("peak_memory_after_backward")
+    _get_stats_and_print_difference(
+        "peak_memory_after_postprocess", "memory_after_decoder", "peak_postprocess_activation"
+    )
     _cprint("")
     # execution time summary
     _cprint("Execution Time Summary")
