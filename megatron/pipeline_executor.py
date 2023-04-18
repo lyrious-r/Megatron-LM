@@ -41,6 +41,8 @@ def _dump_memory_stats(instr_id: int):
                 "current_requested_memory": allocator.current_requested_cuda_memory(),
             }
             json.dump(data, f)
+        allocator.reset_peak_stats()
+        allocator.reset_accumulated_stats()
     else:
         with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/microbatch_stats/iter{args.curr_iteration}_instr{instr_id}.txt', 'w') as f:
             data= {

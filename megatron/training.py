@@ -985,9 +985,12 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
         if iteration == 1:
             if args.plopt_reserve_all_memory:
                 # Reserve all GPU memory upfront.
-                reserved_memory = reserve_full_memory()
-                logger.info("Reserved memory: {:.2f} GB".format(
-                    reserved_memory / 1024.0 / 1024.0 / 1024.0))
+                reserved_memory, memory_limit = reserve_full_memory()
+                logger.info("Reserved memory: {:.2f} GB, "
+                            "memory limit: {:.2f} GB".format(
+                                reserved_memory / 1e9,
+                                memory_limit / 1e9)
+                            )
             # torch.cuda.memory._record_memory_history(True)
             # import pickle
             # def oom_observer(device, alloc, device_alloc, device_free):
