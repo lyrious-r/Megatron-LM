@@ -4,6 +4,7 @@
 
 from datetime import datetime
 import math
+import os
 import sys
 import time
 # The earliest we can measure the start time.
@@ -46,7 +47,10 @@ from .pipeline_executor import get_pipeline_executor
 
 from plopt.memory_opt.utils import reserve_full_memory
 
-DEBUG_DUMP_MEMORY_STATS = True
+DEBUG_DUMP_MEMORY_STATS = os.getenv("PLOPT_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
+DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('PLOPT_DEBUG_DUMP_MEMORY_PREFIX', None)
+if DEBUG_DUMP_MEMORY_STATS and not DEBUG_DUMP_MEMORY_PREFIX:
+    raise ValueError("PLOPT_DEBUG_DUMP_MEMORY_PREFIX must be set if PLOPT_DEBUG_DUMP_MEMORY_STATS is set")
 
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
@@ -584,6 +588,9 @@ def plopt_train_step(data_iterator, forward_step_func,
         pp_rank = mpu.get_pipeline_model_parallel_rank()
         dp_rank = mpu.get_data_parallel_rank()
         tp_rank = mpu.get_tensor_model_parallel_rank()
+        dump_dir = os.path.join(DEBUG_DUMP_MEMORY_PREFIX, 'dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
+        if not os.path.exists(dump_dir):
+            os.makedirs(dump_dir)
         torch.cuda.synchronize()
         if args.plopt_custom_allocator:
             from plopt.memory_opt.cuda_caching_allocator import get_allocator
@@ -595,10 +602,7 @@ def plopt_train_step(data_iterator, forward_step_func,
             # get some stats
             params_size = sum([get_parameters_size(m) for m in model])
             optimizer_states_size = get_optimizer_state_size(optimizer)
-            # resident_tensor_size = get_resident_tensor_size()
-            if not os.path.exists('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank)):
-                os.makedirs('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
-            with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/stats_iter{args.curr_iteration}.txt', 'w') as f:
+            with open(os.path.join(dump_dir, f'stats_iter{args.curr_iteration}.txt'), 'w') as f:
                 data= {
                     "params_size": params_size,
                     "optimizer_states_size": optimizer_states_size,
@@ -613,15 +617,12 @@ def plopt_train_step(data_iterator, forward_step_func,
         else:
             snapshot = torch.cuda.memory._snapshot()
 
-            if not os.path.exists('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank)):
-                os.makedirs('./memory_debug/dr{}_pr{}_tr{}'.format(dp_rank, pp_rank, tp_rank))
-            with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/snapshot_iter{args.curr_iteration}.pickle', 'wb') as f:
+            with open(os.path.join(dump_dir, f'snapshot_iter{args.curr_iteration}.pickle'), 'wb') as f:
                 pickle.dump(snapshot, f)
             # get some stats
             params_size = sum([get_parameters_size(m) for m in model])
             optimizer_states_size = get_optimizer_state_size(optimizer)
-            # resident_tensor_size = get_resident_tensor_size()
-            with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/stats_iter{args.curr_iteration}.txt', 'w') as f:
+            with open(os.path.join(dump_dir, f'stats_iter{args.curr_iteration}.txt'), 'w') as f:
                 data= {
                     "params_size": params_size,
                     "optimizer_states_size": optimizer_states_size,

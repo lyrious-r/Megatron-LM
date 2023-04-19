@@ -1,0 +1,58 @@
+
+#!/bin/bash
+
+# required envs for plopt
+export PLOPT_KV_HOST=${plopt_kv_host}
+export PLOPT_KV_PORT=${plopt_kv_port}
+export PLOPT_DEBUG=${plopt_debug_level}
+export PLOPT_LOGGING_DEBUG_DIR=${plopt_debug_logging_dir}
+export PLOPT_DEBUG_DUMP_EP_STATS=${plopt_dump_stats}
+export PLOPT_DEBUG_DUMP_EP_PREFIX=${plopt_debug_dump_ep_prefix}
+export PLOPT_DEBUG_DUMP_MEMORY_STATS=${plopt_dump_stats}
+export PLOPT_DEBUG_DUMP_MEMORY_PREFIX=${plopt_debug_dump_memory_prefix}
+
+export NCCL_DEBUG=VERSION
+
+DISTRIBUTED_ARGS="--nproc_per_node ${gpus_per_node} --nnodes ${nnodes} --node_rank ${node_rank} --master_addr ${master_addr} --master_port ${master_port} --use-env"
+
+python -m torch.distributed.launch $$DISTRIBUTED_ARGS \
+       pretrain_t5.py \
+       --tensor-model-parallel-size ${tensor_parallel_size} \
+       --pipeline-model-parallel-size ${pipeline_parallel_size} \
+       --encoder-num-layers ${encoder_num_layers} \
+       --decoder-num-layers ${decoder_num_layers} \
+       --hidden-size ${hidden_size} \
+       --num-attention-heads ${num_attn_heads} \
+       --kv-channels ${kv_channels} \
+       --ffn-hidden-size ${ffn_hidden_size} \
+       --encoder-seq-length ${encoder_seq_length} \
+       --decoder-seq-length ${decoder_seq_length} \
+       --micro-batch-size ${micro_batch_size} \
+       --global-batch-size ${global_batch_size} \
+       --max-position-embeddings ${max_pos_embeddings} \
+       --no-async-tensor-model-parallel-allreduce \
+       --no-scatter-gather-tensors-in-pipeline \
+       --train-iters ${train_iters} \
+       --train-epochs 1 \
+       --lr-decay-iters 100 \
+       --data-path ${data_path} \
+       --targets-data-path ${targets_data_path} \
+       --vocab-file ${vocab_file} \
+       --data-impl mmap \
+       --split 949,50,1 \
+       --lr 0.0001 \
+       --min-lr 0.00001 \
+       --lr-decay-style linear \
+       --lr-warmup-fraction .01 \
+       --weight-decay 1e-2 \
+       --clip-grad 1.0 \
+       --log-interval 20 \
+       --save-interval 10000 \
+       --eval-interval 1000 \
+       --eval-iters 5 \
+       --fp16  \
+       --vocab-extra-ids 100 \
+       --num-workers 2 \
+       --dataloader-type ordered \
+       ${pipeline_args} ${recompute_args} ${batching_args} ${plopt_args} ${deepspeed_args} \
+       2>&1 | tee ${stdout_stderr_log}

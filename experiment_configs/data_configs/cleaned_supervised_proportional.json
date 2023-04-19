@@ -1,0 +1,5 @@
+{
+    "data_path": "./datasets/cleaned_supervised_proportional_inputs_document",
+    "targets_data_path": "./datasets/cleaned_supervised_proportional_targets_document",
+    "vocab_file": "./vocabs/t5-base-vocab.txt"
+}

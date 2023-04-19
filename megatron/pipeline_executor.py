@@ -1,3 +1,4 @@
+import os
 from functools import partial
 
 from plopt.pipe.instructions import * # noqa: F403
@@ -14,7 +15,10 @@ from megatron.model import Float16Module, ModelType
 from megatron.core import mpu
 from megatron.schedules import forward_step, backward_step, deallocate_output_tensor
 
-DEBUG_DUMP_MEMORY_STATS = True
+DEBUG_DUMP_MEMORY_STATS = os.getenv("PLOPT_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
+DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('PLOPT_DEBUG_DUMP_MEMORY_PREFIX', None)
+if DEBUG_DUMP_MEMORY_STATS and not DEBUG_DUMP_MEMORY_PREFIX:
+    raise ValueError("PLOPT_DEBUG_DUMP_MEMORY_PREFIX must be set if PLOPT_DEBUG_DUMP_MEMORY_STATS is set")
 
 def _dump_memory_stats(instr_id: int):
     if not DEBUG_DUMP_MEMORY_STATS:
@@ -25,13 +29,14 @@ def _dump_memory_stats(instr_id: int):
     pp_rank = mpu.get_pipeline_model_parallel_rank()
     dp_rank = mpu.get_data_parallel_rank()
     tp_rank = mpu.get_tensor_model_parallel_rank()
-    if not os.path.exists('./memory_debug/dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank)):
-        os.makedirs('./memory_debug/dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank))
+    dump_dir = os.path.join(DEBUG_DUMP_MEMORY_PREFIX, '/dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank))
+    if not os.path.exists(dump_dir):
+        os.makedirs(dump_dir)
     if args.plopt_custom_allocator:
         from plopt.memory_opt.cuda_caching_allocator import get_allocator
         allocator = get_allocator()
 
-        with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/microbatch_stats/iter{args.curr_iteration}_instr{instr_id}.txt', 'w') as f:
+        with open(os.path.join(dump_dir, f'iter{args.curr_iteration}_instr{instr_id}.txt'), 'w') as f:
             data= {
                 "peak_allocated_memory": allocator.peak_allocated_cuda_memory(),
                 "peak_reserved_memory": allocator.peak_reserved_cuda_memory(),
@@ -44,7 +49,7 @@ def _dump_memory_stats(instr_id: int):
         allocator.reset_peak_stats()
         allocator.reset_accumulated_stats()
     else:
-        with open(f'./memory_debug/dr{dp_rank}_pr{pp_rank}_tr{tp_rank}/microbatch_stats/iter{args.curr_iteration}_instr{instr_id}.txt', 'w') as f:
+        with open(os.path.join(dump_dir, f'iter{args.curr_iteration}_instr{instr_id}.txt'), 'w') as f:
             data= {
                 "memory_stats": torch.cuda.memory_stats(),
             }

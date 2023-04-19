@@ -28,3 +28,4 @@ _memory_viz.py
 /trace_debug*/*
 /plopt_ep_stats*/*
 /_*.ipynb
+/experiments/*
