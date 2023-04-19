@@ -40,7 +40,8 @@ def get_linear_layer(rows, columns, init_method):
         layer.bias.zero_()
     return layer
 
-@torch.jit.script
+# @torch.jit.script
+@torch.compile(dynamic=True)
 def gelu_impl(x):
     """OpenAI's gelu implementation."""
     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
@@ -49,6 +50,7 @@ def openai_gelu(x):
     return gelu_impl(x)
 
 #This is actually Python equivalent of torch.nn.functional.gelu(), also with type hints for ONNX exporter
-@torch.jit.script
+# @torch.jit.script
+@torch.compile(dynamic=True)
 def erf_gelu(x):
     return x * 0.5 * (torch.erf(x / 1.41421).to(dtype=x.dtype)+torch.ones_like(x).to(dtype=x.dtype))
