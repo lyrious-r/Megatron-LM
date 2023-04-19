@@ -255,16 +255,21 @@ def _check_training_args(args):
     args.max_pos_embeddings = max(
         args.encoder_seq_length, args.decoder_seq_length
     )
-    # check micro_batch_size and global_batch_size
-    effective_tokens_per_sequence = (
-        args.encoder_seq_length + args.decoder_seq_length
-    )
-    expected_global_batch_size = (
-        args.tokens_per_global_batch // effective_tokens_per_sequence
-    )
-    if args.global_batch_size != expected_global_batch_size:
-        print("Override global batch size to", expected_global_batch_size)
-        args.global_batch_size = expected_global_batch_size
+    if args.enable_plopt:
+        # micro batch size/global batch size is not used
+        # make it 1 so it does not interfere with the check in Megatron-LM
+        args.micro_batch_size = 1
+    else:
+        # check micro_batch_size and global_batch_size
+        effective_tokens_per_sequence = (
+            args.encoder_seq_length + args.decoder_seq_length
+        )
+        expected_global_batch_size = (
+            args.tokens_per_global_batch // effective_tokens_per_sequence
+        )
+        if args.global_batch_size != expected_global_batch_size:
+            print("Override global batch size to", expected_global_batch_size)
+            args.global_batch_size = expected_global_batch_size
     return args
 
 
