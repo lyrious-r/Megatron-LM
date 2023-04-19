@@ -345,7 +345,7 @@ def _check_logging_args(args):
         "encsl{}_decsl{}_gbs{}".format(
             args.encoder_seq_length,
             args.decoder_seq_length,
-            args.global_batch_size,
+            args.tokens_per_global_batch,
         ),
     )
     if not os.path.exists(exp_logging_dir):
