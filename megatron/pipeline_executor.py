@@ -29,7 +29,7 @@ def _dump_memory_stats(instr_id: int):
     pp_rank = mpu.get_pipeline_model_parallel_rank()
     dp_rank = mpu.get_data_parallel_rank()
     tp_rank = mpu.get_tensor_model_parallel_rank()
-    dump_dir = os.path.join(DEBUG_DUMP_MEMORY_PREFIX, '/dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank))
+    dump_dir = os.path.join(DEBUG_DUMP_MEMORY_PREFIX, 'dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank))
     if not os.path.exists(dump_dir):
         os.makedirs(dump_dir)
     if args.plopt_custom_allocator:

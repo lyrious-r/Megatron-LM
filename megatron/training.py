@@ -161,7 +161,7 @@ def pretrain(train_valid_test_dataset_provider,
     iteration = 0
     if args.do_train and args.train_iters > 0:
         if args.use_plopt:
-            itertion = plopt_train(forward_step_func, model, optimizer,
+            iteration = plopt_train(forward_step_func, model, optimizer,
                                    opt_param_scheduler, train_data_iterator)
         else:
             iteration = train(forward_step_func,
@@ -169,6 +169,8 @@ def pretrain(train_valid_test_dataset_provider,
                             train_data_iterator, valid_data_iterator,
                             process_non_loss_data_func)
     print_datetime('after training is done')
+    print("Taking poison pill...", flush=True)
+    os.system("pkill -f 'pretrain_t5'")
 
     if args.do_valid:
         prefix = 'the end of training for val data'

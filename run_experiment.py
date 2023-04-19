@@ -383,35 +383,38 @@ def _check_logging_args(args):
 
 
 def _create_deepspeed_config(args, exp_logging_dir):
-    # generate deepspeed config
-    nranks = args.nnodes * args.gpus_per_node
-    pp_times_tp = args.tensor_parallel_size * args.pipeline_parallel_size
-    assert nranks % pp_times_tp == 0, (
-        f"Number of ranks {nranks} must be divisible by "
-        f"pipeline_parallel_size {args.pipeline_parallel_size} "
-        f"times tensor_parallel_size {args.tensor_parallel_size}"
-    )
-    dp_size = nranks // pp_times_tp
-    per_gpu_batch_size = args.global_batch_size // dp_size
-    assert per_gpu_batch_size % args.micro_batch_size == 0, (
-        f"Per GPU batch size {per_gpu_batch_size} must be divisible by "
-        f"micro batch size {args.micro_batch_size}"
-    )
-    n_micro_batches = per_gpu_batch_size // args.micro_batch_size
-    # create deepspeed config
-    with open(DEEPSPEED_TEMPLATE_PATH, "r") as f:
-        template = Template(f.read())
-    config_str = template.substitute(
-        micro_batch_size=args.micro_batch_size,
-        gradient_accumulation_steps=n_micro_batches,
-        zero_stage=args.deepspeed_zero_stage,
-    )
-    deepspeed_config_path = os.path.join(
-        exp_logging_dir, "deepspeed_config.json"
-    )
-    with open(deepspeed_config_path, "w") as f:
-        f.write(config_str)
-    args.deepspeed_config = deepspeed_config_path
+    if args.enable_deepspeed:
+        # generate deepspeed config
+        nranks = args.nnodes * args.gpus_per_node
+        pp_times_tp = args.tensor_parallel_size * args.pipeline_parallel_size
+        assert nranks % pp_times_tp == 0, (
+            f"Number of ranks {nranks} must be divisible by "
+            f"pipeline_parallel_size {args.pipeline_parallel_size} "
+            f"times tensor_parallel_size {args.tensor_parallel_size}"
+        )
+        dp_size = nranks // pp_times_tp
+        per_gpu_batch_size = args.global_batch_size // dp_size
+        assert per_gpu_batch_size % args.micro_batch_size == 0, (
+            f"Per GPU batch size {per_gpu_batch_size} must be divisible by "
+            f"micro batch size {args.micro_batch_size}"
+        )
+        n_micro_batches = per_gpu_batch_size // args.micro_batch_size
+        # create deepspeed config
+        with open(DEEPSPEED_TEMPLATE_PATH, "r") as f:
+            template = Template(f.read())
+        config_str = template.substitute(
+            micro_batch_size=args.micro_batch_size,
+            gradient_accumulation_steps=n_micro_batches,
+            zero_stage=args.deepspeed_zero_stage,
+        )
+        deepspeed_config_path = os.path.join(
+            exp_logging_dir, "deepspeed_config.json"
+        )
+        with open(deepspeed_config_path, "w") as f:
+            f.write(config_str)
+        args.deepspeed_config = deepspeed_config_path
+    else:
+        args.deepspeed_config = None
     return args
 
 
