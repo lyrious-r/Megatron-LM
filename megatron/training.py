@@ -437,6 +437,7 @@ def setup_model_and_optimizer(model_provider_func,
 
         # patch mpu to add get_model_parallel_world_size
         mpu.get_model_parallel_world_size = mpu.get_tensor_model_parallel_world_size
+        mpu.get_model_parallel_rank = mpu.get_tensor_model_parallel_rank
         model, optimizer, _, opt_param_scheduler = deepspeed.initialize(
             model=model[0],
             optimizer=optimizer,
