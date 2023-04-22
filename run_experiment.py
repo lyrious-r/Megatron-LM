@@ -325,7 +325,7 @@ def _add_plopt_args(parser):
         help="Number of workers for preprocessing (per node).",
     )
     group.add_argument(
-        "--plopt_debug_level", type=str, default="DEBUG", help="Debug level."
+        "--plopt_debug_level", type=str, default="INFO", help="Debug level."
     )
     group.add_argument(
         "--plopt_debug_logging_dir", type=str, help="Debug logging dir."
@@ -358,7 +358,9 @@ def _check_logging_args(args):
             args.encoder_seq_length,
             args.decoder_seq_length,
             args.tokens_per_global_batch,
-        ),
+        )
+    print("Experiment name:", args.experiment_name)
+    print("Experiment spec name:", exp_spec_name)
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
         args.experiment_name,
@@ -415,6 +417,16 @@ def _create_deepspeed_config(args, exp_logging_dir):
             f"micro batch size {args.micro_batch_size}"
         )
         n_micro_batches = per_gpu_batch_size // args.micro_batch_size
+        # if running with pipeline, assert that we are using zero 1
+        if args.pipeline_parallel_size > 1 and args.deepspeed_zero_stage >= 2:
+            raise ValueError(
+                "ZeRO2 and ZeRO3 are not supported with pipeline parallelism."
+            )
+        # disable overlap comm if using pipeline parallelism
+        if args.pipeline_parallel_size > 1:
+            overlap_comm = "false"
+        else:
+            overlap_comm = "true"
         # create deepspeed config
         with open(DEEPSPEED_TEMPLATE_PATH, "r") as f:
             template = Template(f.read())
@@ -422,6 +434,7 @@ def _create_deepspeed_config(args, exp_logging_dir):
             micro_batch_size=args.micro_batch_size,
             gradient_accumulation_steps=n_micro_batches,
             zero_stage=args.deepspeed_zero_stage,
+            overlap_comm=overlap_comm,
         )
         deepspeed_config_path = os.path.join(
             exp_logging_dir, "deepspeed_config.json"
@@ -542,6 +555,7 @@ def _get_shell_script(args):
             f"--plopt-layer-to-device {args.plopt_layer_to_device}",
             "--plopt-prefetch-planner-num-workers "
             + f"{args.plopt_prefetch_planner_num_workers}",
+            f"--plopt-zero-stage {args.deepspeed_zero_stage}",
             "--plopt-reserve-all-memory",
             "--plopt-custom-allocator",
         ]

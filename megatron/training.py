@@ -446,6 +446,8 @@ def setup_model_and_optimizer(model_provider_func,
             mpu=mpu,
             dist_init_required=False
         )
+        if mpu.get_pipeline_model_parallel_world_size() > 1:
+            model.pipeline_parallelism = True
         model = [model]
 
 
@@ -578,10 +580,11 @@ def plopt_train_step(data_iterator, forward_step_func,
     timers = get_timers()
 
     # Set grad to zero.
-    if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
-        for partition in model:
-            partition.zero_grad_buffer()
-    optimizer.zero_grad()
+    if not args.deepspeed:
+        if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
+            for partition in model:
+                partition.zero_grad_buffer()
+        optimizer.zero_grad()
 
     if DEBUG_DUMP_MEMORY_STATS:
         import pickle
@@ -667,7 +670,8 @@ def plopt_train_step(data_iterator, forward_step_func,
         torch.cuda.empty_cache()
 
     # Reduce gradients.
-    optimizer.reduce_model_grads(args, timers)
+    if not args.deepspeed:
+        optimizer.reduce_model_grads(args, timers)
 
     # Vision gradients.
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
@@ -676,29 +680,35 @@ def plopt_train_step(data_iterator, forward_step_func,
         unwrapped_model.cancel_gradients_last_layer(args.curr_iteration)
 
     # Update parameters.
-    timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
-    timers('optimizer').stop()
+    if not args.deepspeed:
+        timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
+        update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
+        timers('optimizer').stop()
 
-    # Gather params.
-    if update_successful:
-        optimizer.gather_model_params(args, timers)
+        # Gather params.
+        if update_successful:
+            optimizer.gather_model_params(args, timers)
 
-    # Vision momentum.
-    if args.vision_pretraining and args.vision_pretraining_type == "dino":
-        unwrapped_model = unwrap_model(model[0],
-                                       (torchDDP, LocalDDP, Float16Module))
-        unwrapped_model.update_momentum(args.curr_iteration)
+        # Vision momentum.
+        if args.vision_pretraining and args.vision_pretraining_type == "dino":
+            unwrapped_model = unwrap_model(model[0],
+                                        (torchDDP, LocalDDP, Float16Module))
+            unwrapped_model.update_momentum(args.curr_iteration)
 
-    # Update learning rate.
-    if update_successful:
-        increment = get_num_microbatches() * \
-                    args.micro_batch_size * \
-                    args.data_parallel_size
-        opt_param_scheduler.step(increment=increment)
-        skipped_iter = 0
+        # Update learning rate.
+        if update_successful:
+            increment = get_num_microbatches() * \
+                        args.micro_batch_size * \
+                        args.data_parallel_size
+            opt_param_scheduler.step(increment=increment)
+            skipped_iter = 0
+        else:
+            skipped_iter = 1
     else:
-        skipped_iter = 1
+        model[0].step()
+        skipped_iter = 0
+        grad_norm = 0
+        num_zeros_in_grad = 0
 
     # Empty unused memory.
     if args.empty_unused_memory_level >= 2:

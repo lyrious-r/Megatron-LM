@@ -209,7 +209,7 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
         _dump_memory_stats(exec.instr_index)
     return _handle_forward
 
-def _create_backward_handler(optimizer):
+def _create_backward_handler(optimizer, model=None):
     args = get_args()
     timers = get_timers()
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
@@ -221,6 +221,10 @@ def _create_backward_handler(optimizer):
             assert hasattr(exec, "_rev_chunk_index")
             chunk_id = exec._rev_chunk_index[instr.stage]
             mpu.set_virtual_pipeline_model_parallel_rank(chunk_id)
+            ds_model = None
+        elif model is not None:
+            assert len(model) == 1
+            ds_model = model[0]
         assert hasattr(exec, "input_tensors")
         assert hasattr(exec, "output_tensors")
         buffer_ids = instr.buffer_ids
@@ -245,7 +249,7 @@ def _create_backward_handler(optimizer):
             output_tensor_grad = new_output_tensor_grad
         input_tensor_grad = \
                 backward_step(optimizer, input_tensor, output_tensor,
-                            output_tensor_grad, fwd_bwd_timers)
+                            output_tensor_grad, fwd_bwd_timers, ds_model=ds_model)
         if not isinstance(input_tensor_grad, list):
             input_tensor_grad = [input_tensor_grad]
         # swap them back
@@ -300,7 +304,8 @@ def _handle_send_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
         # all communication ops are launched on a single stream.
         # p2p_op = dist.P2POp(dist.isend, output_tensor, instr.peer)
         # p2p_ops.append(p2p_op)
-        op = dist.isend(output_tensor, instr.peer)
+        peer_rank = mpu.get_global_rank_from_pipeline_rank(instr.peer)
+        op = dist.isend(output_tensor, peer_rank, group=mpu.get_pipeline_model_parallel_group())
         pending_ops.append(op)
     # pending_ops = dist.batch_isend_irecv(p2p_ops)
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
@@ -355,7 +360,8 @@ def _handle_recv_start(exec: PipelineExecutor, instr: CommunicationStartInstruct
         # dist.recv(input_tensor, instr.peer)
         # p2p_op = dist.P2POp(dist.irecv, input_tensor, instr.peer)
         # p2p_ops.append(p2p_op)
-        op = dist.irecv(input_tensor, instr.peer)
+        peer_rank = mpu.get_global_rank_from_pipeline_rank(instr.peer)
+        op = dist.irecv(input_tensor, peer_rank, mpu.get_pipeline_model_parallel_group())
         pending_ops.append(op)
     # pending_ops = dist.batch_isend_irecv(p2p_ops)
     key = (instr.microbatch, instr.stage, _comm_instr_key_map[instr.__class__])
@@ -378,11 +384,12 @@ def _handle_recv_finish(exec: PipelineExecutor, instr: CommunicationFinishInstur
         op.wait()
 
 def get_pipeline_executor(forward_step_func, data_iterator, model, optimizer):
-    executor = PipelineExecutor(rank=mpu.get_pipeline_model_parallel_rank())
+    executor = PipelineExecutor(dp_rank=mpu.get_data_parallel_rank(),
+                                pp_rank=mpu.get_pipeline_model_parallel_rank())
     # register handlers
     executor.register_handler(LoadInput, _handle_load_input)
     executor.register_handler(ForwardPass, _create_forward_handler(forward_step_func, data_iterator, model))
-    executor.register_handler(BackwardPass, _create_backward_handler(optimizer))
+    executor.register_handler(BackwardPass, _create_backward_handler(optimizer, model=model))
     # comm handlers
     executor.register_handler(SendActivationStart, with_nvtx_stage_name("send_forward_start")(_handle_send_start))
     executor.register_handler(SendGradStart, with_nvtx_stage_name("send_backward_start")(_handle_send_start))

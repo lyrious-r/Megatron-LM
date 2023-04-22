@@ -15,6 +15,7 @@ export NCCL_DEBUG=VERSION
 
 DISTRIBUTED_ARGS="--nproc_per_node ${gpus_per_node} --nnodes ${nnodes} --node_rank ${node_rank} --master_addr ${master_addr} --master_port ${master_port} --use-env"
 
+nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none --duration 120 --delay 60 -o test_hanging -f true \
 python -m torch.distributed.launch $$DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size ${tensor_parallel_size} \

@@ -1253,5 +1253,8 @@ def _add_plopt_args(parser):
                         help='Use our modified memory allocator.')
     group.add_argument('--plopt-reserve-all-memory', action='store_true',
                         help='Reserve all memory before training starts.')
+    group.add_argument('--plopt-zero-stage', type=int, choices=[0,1,2,3],
+                        help='Zero stage to use. This must match the stage in '
+                              'the DeepSpeed config.')
     return parser
 

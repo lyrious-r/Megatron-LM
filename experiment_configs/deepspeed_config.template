@@ -34,7 +34,7 @@
         "stage": ${zero_stage},
         "allgather_partitions": true,
         "allgather_bucket_size": 5e8,
-        "overlap_comm": true,
+        "overlap_comm": ${overlap_comm},
         "reduce_scatter": true,
         "reduce_bucket_size": 5e8,
         "contiguous_gradients" : true,
