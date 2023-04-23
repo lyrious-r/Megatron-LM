@@ -103,14 +103,17 @@ def get_batch(data_iterator):
 
 
 def loss_func(loss_mask, output_tensor):
+    args = get_args()
     lm_loss_ = output_tensor.float()
     lm_loss = torch.sum(
         lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
 
     loss = lm_loss
-    averaged_losses = average_losses_across_data_parallel_group([lm_loss])
-
-    return loss, {'lm loss': averaged_losses[0]}
+    if not args.use_plopt:
+        averaged_losses = average_losses_across_data_parallel_group([lm_loss])
+        return loss, {'lm loss': averaged_losses[0]}
+    else:
+        return loss, {'lm loss': loss}
 
 
 def forward_step(data_iterator, model):

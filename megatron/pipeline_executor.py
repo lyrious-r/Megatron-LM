@@ -68,7 +68,10 @@ def recompute_level_to_flag(recompute_lvl: RecomputeMethod):
 def with_nvtx_stage_name(stage_name):
     def decorator(func):
         def wrapper(exec: PipelineExecutor, instr: PipeInstruction):
-            with torch.cuda.nvtx.range("{}_m{}_s{}".format(stage_name, instr.microbatch, instr.stage)):
+            range_name = "{}_m{}_s{}".format(stage_name, instr.microbatch, instr.stage)
+            if exec.current_iteration is not None:
+                range_name += "_iter{}".format(exec.current_iteration)
+            with torch.cuda.nvtx.range(range_name):
                 return func(exec, instr)
         return wrapper
     return decorator

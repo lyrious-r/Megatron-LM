@@ -235,6 +235,7 @@ def _add_training_args(parser):
     group.add_argument(
         "--deepspeed_zero_stage",
         type=int,
+        default=0,
         choices=[0, 1, 2, 3],
         help="Which stage of ZeRO to use.",
     )

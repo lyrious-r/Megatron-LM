@@ -42,6 +42,7 @@ from megatron.schedules import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
 from megatron.data.t5_dataset import T5UnsupervisedDataset
+from megatron.utils import average_losses_across_data_parallel_group
 
 from .pipeline_executor import get_pipeline_executor
 
@@ -665,6 +666,17 @@ def plopt_train_step(data_iterator, forward_step_func,
     losses_reduced = executor.forward_data_store
     timers('forward-backward').stop()
 
+    loss_reduced = {}
+    if mpu.is_pipeline_last_stage(ignore_virtual=True):
+        # Average loss across microbatches.
+        for key in losses_reduced[0]:
+            losses_reduced_for_key = [x[key] for x in losses_reduced]
+            loss_reduced[key] = sum(losses_reduced_for_key) / len(losses_reduced_for_key)
+        # Average loss across data parallel groups.
+        for key in loss_reduced:
+            reduced = average_losses_across_data_parallel_group([loss_reduced[key]])
+            loss_reduced[key] = reduced[0]
+
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
         torch.cuda.empty_cache()
@@ -714,14 +726,7 @@ def plopt_train_step(data_iterator, forward_step_func,
     if args.empty_unused_memory_level >= 2:
         torch.cuda.empty_cache()
 
-    if mpu.is_pipeline_last_stage(ignore_virtual=True):
-        # Average loss across microbatches.
-        loss_reduced = {}
-        for key in losses_reduced[0]:
-            losses_reduced_for_key = [x[key] for x in losses_reduced]
-            loss_reduced[key] = sum(losses_reduced_for_key) / len(losses_reduced_for_key)
-        return loss_reduced, skipped_iter, grad_norm, num_zeros_in_grad
-    return {}, skipped_iter, grad_norm, num_zeros_in_grad
+    return loss_reduced, skipped_iter, grad_norm, num_zeros_in_grad
 
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
