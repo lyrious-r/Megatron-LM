@@ -11,11 +11,10 @@ export PLOPT_DEBUG_DUMP_EP_PREFIX=${plopt_debug_dump_ep_prefix}
 export PLOPT_DEBUG_DUMP_MEMORY_STATS=${plopt_dump_stats}
 export PLOPT_DEBUG_DUMP_MEMORY_PREFIX=${plopt_debug_dump_memory_prefix}
 
-export NCCL_DEBUG=VERSION
+export NCCL_DEBUG=WARN
 
 DISTRIBUTED_ARGS="--nproc_per_node ${gpus_per_node} --nnodes ${nnodes} --node_rank ${node_rank} --master_addr ${master_addr} --master_port ${master_port} --use-env"
 
-nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -s none --duration 120 --delay 60 -o test_hanging -f true \
 python -m torch.distributed.launch $$DISTRIBUTED_ARGS \
        pretrain_t5.py \
        --tensor-model-parallel-size ${tensor_parallel_size} \

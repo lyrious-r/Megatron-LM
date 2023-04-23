@@ -164,6 +164,8 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
                 data_iterator = data_iterators[0]
             else:
                 data_iterator = data_iterators
+        if args.deepspeed:
+            model.set_gradient_accumulation_boundary(exec.is_last_micro_batch)
         buffer_ids = instr.buffer_ids
         # in decoder stage, there should be two input tensors
         # first one is received encoder activation, second is last decoder
@@ -230,6 +232,8 @@ def _create_backward_handler(optimizer, model=None):
             ds_model = model[0]
         assert hasattr(exec, "input_tensors")
         assert hasattr(exec, "output_tensors")
+        if ds_model and args.deepspeed:
+            ds_model.set_gradient_accumulation_boundary(exec.is_last_micro_batch)
         buffer_ids = instr.buffer_ids
         key = (instr.microbatch, exec.execution_plan.nstages - 1 - instr.stage)
         input_tensor = exec.input_tensors[key]

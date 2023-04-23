@@ -717,6 +717,8 @@ def plopt_train_step(data_iterator, forward_step_func,
         else:
             skipped_iter = 1
     else:
+        model[0].set_gradient_accumulation_boundary(True)
+        model[0].allreduce_gradients()
         model[0].step()
         skipped_iter = 0
         grad_norm = 0
