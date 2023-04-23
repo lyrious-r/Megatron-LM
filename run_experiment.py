@@ -345,21 +345,18 @@ def _add_plopt_args(parser):
 
 
 def _check_logging_args(args):
+    exp_spec_name = "encsl{}_decsl{}_gbs{}".format(
+        args.encoder_seq_length,
+        args.decoder_seq_length,
+        args.tokens_per_global_batch,
+    )
     if args.enable_deepspeed:
-        exp_spec_name = "encsl{}_decsl{}_gbs{}_mbs{}_rc{}_zero{}".format(
-            args.encoder_seq_length,
-            args.decoder_seq_length,
-            args.tokens_per_global_batch,
-            args.micro_batch_size,
-            args.recompute_level,
-            args.deepspeed_zero_stage
-        )
-    else:
-        exp_spec_name = "encsl{}_decsl{}_gbs{}".format(
-            args.encoder_seq_length,
-            args.decoder_seq_length,
-            args.tokens_per_global_batch,
-        )
+        if not args.enable_plopt:
+            exp_spec_name += "_mbs{}_rc{}".format(
+                args.micro_batch_size, args.recompute_level
+            )
+        exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
+
     print("Experiment name:", args.experiment_name)
     print("Experiment spec name:", exp_spec_name)
     exp_logging_dir = os.path.join(
