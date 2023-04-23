@@ -9,7 +9,10 @@ from megatron import print_rank_0
 from megatron import get_timers
 from megatron import get_tokenizer
 from megatron.core import tensor_parallel
-from megatron.data.gpt_dataset import build_train_valid_test_datasets
+# from megatron.data.gpt_dataset import build_train_valid_test_datasets
+
+# for supervised training, we reuse the T5 dataset
+from megatron.data.dataset_utils import build_train_valid_test_datasets
 from megatron.model import GPTModel, ModelType
 from megatron.training import pretrain
 from megatron.utils import get_ltor_masks_and_position_ids
@@ -98,12 +101,18 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
         data_impl=args.data_impl,
         splits_string=args.split,
         train_valid_test_num_samples=train_val_test_num_samples,
-        seq_length=args.seq_length,
+        max_seq_length=args.encoder_seq_length,
+        max_seq_length_dec=args.decoder_seq_length,
+        masked_lm_prob=args.mask_prob,
+        short_seq_prob=args.short_seq_prob,
         seed=args.seed,
         skip_warmup=(not args.mmap_warmup),
-        train_data_prefix=args.train_data_path,
-        valid_data_prefix=args.valid_data_path,
-        test_data_prefix=args.test_data_path,)
+        dataset_type='t5' if args.targets_data_path is None else 't5_supervised',
+        num_epochs=args.train_epochs if args.targets_data_path else None,
+        sort_samples=args.sort_dataset,
+        pack_samples=args.pack_dataset,
+        inputs_only=True,
+        )
     print_rank_0("> finished creating GPT datasets ...")
 
     return train_ds, valid_ds, test_ds

@@ -21,11 +21,14 @@ def run_pack_samples(
     max_seq_len_input,
     target_samples_mapping=None,
     max_seq_len_target=None,
+    inputs_only=False,
 ):
     """Pack multiple samples into a single sequence."""
     # each sample is a list of tuples (start_idx, end_idx, seq_len)
     input_samples = []
     target_samples = []
+    assert target_samples_mapping is not None, \
+        "Currently only support supervised tasks"
     if target_samples_mapping is not None:
         assert len(input_samples_mapping) == len(
             target_samples_mapping
@@ -47,46 +50,55 @@ def run_pack_samples(
     for idx in range(len(input_samples_mapping)):
         truncated = False
         input_sample = input_samples_mapping[idx]
-        total_enc_untruncated_tokens += input_sample[2]
-        if input_sample[2] > max_seq_len_input:
+        target_sample = target_samples_mapping[idx]
+
+        input_sample_length = input_sample[2]
+        target_sample_length = target_sample[2]
+        if inputs_only:
+            # use concatenated lengths for input
+            input_sample_length += target_sample_length
+            target_sample_length = 0
+
+        total_enc_untruncated_tokens += input_sample_length
+        total_dec_untruncated_tokens += target_sample[2]
+        if input_sample_length > max_seq_len_input:
             truncated = True
-            total_enc_truncated_tokens += input_sample[2] - max_seq_len_input
-            total_enc_tokens_for_samples_truncated += input_sample[2]
-        input_seq_len = min(input_sample[2], max_seq_len_input)
+            total_enc_truncated_tokens += input_sample_length - max_seq_len_input
+            total_enc_tokens_for_samples_truncated += input_sample_length
+        if target_sample[2] > max_seq_len_target:
+            truncated = True
+            total_dec_truncated_tokens += target_sample[2] - max_seq_len_target
+            total_dec_tokens_for_samples_truncated += target_sample[2]
+        input_seq_len = min(input_sample_length, max_seq_len_input)
+        target_seq_len = min(target_sample_length, max_seq_len_target)
         total_enc_tokens += input_seq_len
-        if target_samples_mapping is not None:
-            target_sample = target_samples_mapping[idx]
-            total_dec_untruncated_tokens += target_sample[2]
-            if target_sample[2] > max_seq_len_target:
-                truncated = True
-                total_dec_truncated_tokens += target_sample[2] - max_seq_len_target
-                total_dec_tokens_for_samples_truncated += target_sample[2]
-            target_seq_len = min(target_sample[2], max_seq_len_target)
-            total_dec_tokens += target_seq_len
+        total_dec_tokens += target_seq_len
         if truncated:
             num_truncated_samples += 1
+        # if adding the current sample will exceed the max sequence length,
+        # then start a new sequence
+        # Note: if inputs_only, we still put target_samples into
+        # curr_target_sequence to simplify the code. Actual concatenation
+        # happens later.
         if curr_input_seq_len + input_seq_len > max_seq_len_input or (
-            target_samples_mapping is not None
-            and curr_target_seq_len + target_seq_len > max_seq_len_target
+           curr_target_seq_len + target_seq_len > max_seq_len_target
         ):
             input_samples.append(curr_input_sequence.copy())
             avg_samples_per_sequence += len(curr_input_sequence)
             curr_input_seq_len = 0
             curr_input_sequence = []
-            if target_samples_mapping is not None:
-                target_samples.append(curr_target_sequence.copy())
-                curr_target_seq_len = 0
-                curr_target_sequence = []
+            target_samples.append(curr_target_sequence.copy())
+            curr_target_seq_len = 0
+            curr_target_sequence = []
         curr_input_seq_len += input_seq_len
         curr_input_sequence.append(tuple(input_sample))
-        if target_samples_mapping is not None:
-            curr_target_seq_len += target_seq_len
-            curr_target_sequence.append(tuple(target_sample))
+        curr_target_seq_len += target_seq_len
+        curr_target_sequence.append(tuple(target_sample))
     # last sequence
     if curr_input_seq_len > 0:
         input_samples.append(curr_input_sequence)
         avg_samples_per_sequence += len(curr_input_sequence)
-    if target_samples_mapping is not None and curr_target_seq_len > 0:
+    if curr_target_seq_len > 0:
         target_samples.append(curr_target_sequence)
     print_rank_0(
         ">>>> Pack samples: {} input sequences, {} target sequences, avg samples per sequence: {}, enc batching eff: {}, dec batching eff: {}".format(
@@ -158,12 +170,6 @@ class T5UnsupervisedDataset(torch.utils.data.Dataset):
         self.eos_id = tokenizer.eos_token_id
         self.sentinel_tokens = tokenizer.additional_special_tokens_ids
         assert len(self.sentinel_tokens) > 0, "Provide the argument --vocab-extra-ids 100 to the script"
-
-    def get_max_seq_len_from_data(self):
-        if self.packed:
-            return self.max_seq_length
-        else:
-            return min(np.max(self.samples_mapping[:, 2]), self.max_seq_length)
 
     def get_seq_len(self, idx):
         if self.packed:
@@ -238,6 +244,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         max_seq_length,
         max_seq_length_dec,
         seed,
+        inputs_only=False,
         sort_samples=False,
         pack_samples=False,
         dynamic_batchsize=True,
@@ -251,6 +258,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         self.packed = pack_samples
         self.supervised = True
         self.ordered = True
+        self.inputs_only = inputs_only
         self.max_seq_length = max_seq_length
         self.max_seq_length_dec = max_seq_length_dec
         self.input_max_seq_length = -1
@@ -289,46 +297,60 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
                 self.max_seq_length,
                 self.target_samples_mapping,
                 self.max_seq_length_dec - 2,
+                inputs_only=self.inputs_only,
             )
 
         # Vocab stuff.
         tokenizer = get_tokenizer()
         self.vocab_id_list = list(tokenizer.inv_vocab.keys())
         self.vocab_id_to_token_dict = tokenizer.inv_vocab
-        self.cls_id = tokenizer.cls
-        self.sep_id = tokenizer.sep
-        self.mask_id = tokenizer.mask
-        self.pad_id = tokenizer.pad
-        self.bos_id = tokenizer.bos_token_id
-        self.eos_id = tokenizer.eos_token_id
-        self.sentinel_tokens = tokenizer.additional_special_tokens_ids
+        # Note: we only care about troughput so these ids are not properly
+        # set for the GPT model. Modify this in actual training.
+        try:
+            self.cls_id = tokenizer.cls
+        except (NotImplementedError, AttributeError):
+            self.cls_id = 0
+        try:
+            self.sep_id = tokenizer.sep
+        except (NotImplementedError, AttributeError):
+            self.sep_id = 0
+        try:
+            self.mask_id = tokenizer.mask
+        except (NotImplementedError, AttributeError):
+            self.mask_id = 0
+        try:
+            self.pad_id = tokenizer.pad
+        except (NotImplementedError, AttributeError):
+            self.pad_id = 0
+        try:
+            self.bos_id = tokenizer.bos_token_id
+        except (NotImplementedError, AttributeError):
+            self.bos_id = 0
+        try:
+            self.eos_id = tokenizer.eos_token_id
+        except (NotImplementedError, AttributeError):
+            self.eos_id = 0
+        try:
+            self.sentinel_tokens = tokenizer.additional_special_tokens_ids
+        except (NotImplementedError, AttributeError):
+            self.sentinel_tokens = [0]
         assert (
             len(self.sentinel_tokens) > 0
         ), "Provide the argument --vocab-extra-ids 100 to the script"
         print_rank_0(" > input sample mapping shapes: {}".format(self.input_samples_mapping.shape))
         print_rank_0(" > target sample mapping shapes: {}".format(self.target_samples_mapping.shape))
 
-    def get_max_seq_len_from_data(self):
-        if self.packed:
-            return self.max_seq_length
-        else:
-            return min(np.max(self.input_samples_mapping[:, 2]), self.max_seq_length)
-
-    def get_dec_max_seq_len_from_data(self):
-        if self.packed:
-            return self.max_seq_length_dec
-        else:
-            return min(
-                np.max(self.target_samples_mapping[:, 2]), self.max_seq_length_dec
-            )
-
     def get_seq_len(self, idx):
         if self.packed:
             return self.max_seq_length
         else:
+            if self.inputs_only:
+                return self.input_samples_mapping[idx, 2] + self.target_samples_mapping[idx, 2]
             return self.input_samples_mapping[idx, 2]
 
     def get_dec_seq_len(self, idx):
+        if self.inputs_only:
+            return 0
         if self.packed:
             return self.max_seq_length_dec
         else:
@@ -345,6 +367,8 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
 
     def pack_fn(self, tensors):
         tensors_to_cat = []
+        if len(tensors) == 0 or tensors is None:
+            return tensors_to_cat
         if isinstance(tensors[0], list):
             for idx, tensor in enumerate(tensors):
                 tensors_to_cat.extend(tensor)
@@ -395,9 +419,9 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         for sequence in batch:
             padded_sequence = build_supervised_training_sample(
                 sequence["text_enc"],
-                sequence["text_dec"],
+                sequence["text_dec"] if not self.inputs_only else None,
                 args.encoder_seq_length,
-                args.decoder_seq_length,
+                args.decoder_seq_length if not self.inputs_only else 0,
                 self.pad_id,
                 self.bos_id,
                 self.eos_id,
@@ -435,6 +459,11 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             for index in range(target_start_index, target_end_index):
                 target_sample.append(self.target_indexed_dataset[index])
 
+        if self.inputs_only:
+            # concat target to input
+            input_sample = input_sample + target_sample
+            target_sample = []
+
         # Note that this rng state should be numpy and not python since
         # python randint is inclusive whereas the numpy one is exclusive.
         # np_rng = np.random.RandomState(seed=(self.seed + idx))
@@ -442,11 +471,16 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             # run pack fn on the samples
             input_sample, _ = self.pack_fn(input_sample)
             input_sample = [input_sample]
-            target_sample, _ = self.pack_fn(target_sample)
-            target_sample = [target_sample]
+            if not self.inputs_only:
+                target_sample, _ = self.pack_fn(target_sample)
+                target_sample = [target_sample]
 
+        if not self.inputs_only:
+            return build_unpadded_sample(
+                input_sample, self.max_seq_length, target_sample, self.max_seq_length_dec
+            )
         return build_unpadded_sample(
-            input_sample, target_sample, self.max_seq_length, self.max_seq_length_dec
+            input_sample, self.max_seq_length, None, self.max_seq_length_dec
         )
 
 
@@ -547,77 +581,104 @@ def build_supervised_training_sample(input_sample, target_sample,
         input_tokens = [token for sentence in input_sample for token in sentence]
     else:
         input_tokens = input_sample
-    if isinstance(target_sample[0], list):
-        target_tokens = [token for sentence in target_sample for token in sentence]
-    else:
-        target_tokens = target_sample
+    if target_sample is not None:
+        if isinstance(target_sample[0], list):
+            target_tokens = [token for sentence in target_sample for token in sentence]
+        else:
+            target_tokens = target_sample
 
     # Truncate to `max_seq_length`.
     input_max_num_tokens = max_seq_length
     input_truncated = len(input_tokens) > input_max_num_tokens
     input_tokens = input_tokens[:input_max_num_tokens]
 
-    target_max_num_tokens = max_seq_length_dec - 2
-    target_truncated = len(target_tokens) > target_max_num_tokens
-    target_tokens = target_tokens[:target_max_num_tokens]
+    if target_sample is not None:
+        target_max_num_tokens = max_seq_length_dec - 2
+        target_truncated = len(target_tokens) > target_max_num_tokens
+        target_tokens = target_tokens[:target_max_num_tokens]
 
     # Padding.
-    (
-        tokens_enc,
-        tokens_dec_in,
-        labels,
-        enc_mask,
-        dec_mask,
-        enc_dec_mask,
-        loss_mask,
-    ) = pad_and_convert_to_numpy(
-        input_tokens,
-        [],
-        [],
-        pad_id,
-        max_seq_length,
-        max_seq_length_dec,
-        target_tokens,
-        [],
-        bos_id,
-        eos_id,
-        sentinel_tokens,
-    )
-
-    train_sample = {
-        "text_enc": tokens_enc,
-        "text_dec": tokens_dec_in,
-        "labels": labels,
-        "loss_mask": loss_mask,
-        "input_truncated": int(input_truncated),
-        "target_truncated": int(target_truncated),
-        "enc_mask": enc_mask,
-        "dec_mask": dec_mask,
-        "enc_dec_mask": enc_dec_mask,
-    }
+    if target_sample is not None:
+        (
+            tokens_enc,
+            tokens_dec_in,
+            labels,
+            enc_mask,
+            dec_mask,
+            enc_dec_mask,
+            loss_mask,
+        ) = pad_and_convert_to_numpy(
+            input_tokens,
+            [],
+            [],
+            pad_id,
+            max_seq_length,
+            max_seq_length_dec,
+            target_tokens,
+            [],
+            bos_id,
+            eos_id,
+            sentinel_tokens,
+        )
+        train_sample = {
+            "text_enc": tokens_enc,
+            "text_dec": tokens_dec_in,
+            "labels": labels,
+            "loss_mask": loss_mask,
+            "input_truncated": int(input_truncated),
+            "target_truncated": int(target_truncated),
+            "enc_mask": enc_mask,
+            "dec_mask": dec_mask,
+            "enc_dec_mask": enc_dec_mask,
+        }
+    else:
+        # decoder only
+        tokens_enc = pad_and_convert_to_numpy_inputs_only(
+            input_tokens, pad_id, max_seq_length, eos_id
+        )
+        train_sample = {
+            "text": tokens_enc,
+        }
     return train_sample
 
 
 def build_unpadded_sample(
-    input_sample, target_sample, max_seq_length, max_seq_length_dec
+    input_sample, max_seq_length, target_sample=None, max_seq_length_dec=None,
 ):
     # flatten sentences into one list
     input_tokens = [token for sentence in input_sample for token in sentence]
-    target_tokens = [token for sentence in target_sample for token in sentence]
+    if target_sample is not None:
+        target_tokens = [token for sentence in target_sample for token in sentence]
 
     # Truncate to `max_seq_length`.
     input_max_num_tokens = max_seq_length
     input_tokens = input_tokens[:input_max_num_tokens]
 
-    target_max_num_tokens = max_seq_length_dec - 2
-    target_tokens = target_tokens[:target_max_num_tokens]
+    if target_sample is not None:
+        target_max_num_tokens = max_seq_length_dec - 2
+        target_tokens = target_tokens[:target_max_num_tokens]
 
     train_sample = {
         "text_enc": input_tokens,
-        "text_dec": target_tokens,
     }
+    if target_sample is not None:
+        train_sample["text_dec"] = target_tokens
     return train_sample
 
+
+def pad_and_convert_to_numpy_inputs_only(tokens, pad_id, max_seq_length, eos_id):
+    num_tokens = len(tokens)
+    if len(tokens) < max_seq_length:
+        inputs = tokens + [eos_id]
+        num_tokens += 1
+    else:
+        inputs = tokens
+    # padding mask.
+    padding_length = max_seq_length - num_tokens
+    assert padding_length >= 0
+    filler = [pad_id] * padding_length
+    tokens_enc = np.array(inputs + filler, dtype=np.int64)
+    return tokens_enc
 
 def pad_and_convert_to_numpy(tokens, masked_positions,
                              masked_labels, pad_id,

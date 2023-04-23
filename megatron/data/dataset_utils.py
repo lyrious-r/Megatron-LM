@@ -432,7 +432,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     pack_samples=False,
                                     targets_data_path=None,
                                     dynamic_batch_size=None,
-                                    offline_build=False):
+                                    offline_build=False,
+                                    inputs_only=False,):
 
     if len(data_prefix) == 1:
         return _build_train_valid_test_datasets(data_prefix[0],
@@ -449,7 +450,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                                 pack_samples=pack_samples,
                                                 targets_data_path=targets_data_path,
                                                 dynamic_batch_size=dynamic_batch_size,
-                                                offline_build=offline_build)
+                                                offline_build=offline_build,
+                                                inputs_only=inputs_only,)
     # Blending dataset.
     # Parse the values.
     output = get_datasets_weights_and_num_samples(data_prefix,
@@ -501,7 +503,8 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                      pack_samples=False,
                                      targets_data_path=None,
                                      dynamic_batch_size=None,
-                                     offline_build=False):
+                                     offline_build=False,
+                                     inputs_only=False,):
 
     if dataset_type not in DSET_TYPES:
         raise ValueError("Invalid dataset_type: ", dataset_type)
@@ -578,6 +581,7 @@ def _build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                 seed=seed,
             )
             if dataset_type == DSET_TYPE_T5 or dataset_type == DSET_TYPE_T5_SUPERVISED:
+                kwargs["inputs_only"] = inputs_only
                 kwargs["sort_samples"] = sort_samples
                 kwargs["pack_samples"] = pack_samples
                 if dataset_type == DSET_TYPE_T5_SUPERVISED:
