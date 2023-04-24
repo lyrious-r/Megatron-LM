@@ -368,7 +368,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
     def pack_fn(self, tensors):
         tensors_to_cat = []
         if len(tensors) == 0 or tensors is None:
-            return tensors_to_cat
+            return tensors_to_cat, 0
         if isinstance(tensors[0], list):
             for idx, tensor in enumerate(tensors):
                 tensors_to_cat.extend(tensor)
@@ -658,8 +658,9 @@ def build_unpadded_sample(
         target_max_num_tokens = max_seq_length_dec - 2
         target_tokens = target_tokens[:target_max_num_tokens]
 
+    text_enc_key = "text_enc" if target_sample is not None else "text"
     train_sample = {
-        "text_enc": input_tokens,
+        text_enc_key: input_tokens,
     }
     if target_sample is not None:
         train_sample["text_dec"] = target_tokens

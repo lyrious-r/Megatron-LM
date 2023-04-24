@@ -134,7 +134,9 @@ def validate_args(args, defaults={}):
     else:
         assert args.encoder_num_layers is not None, \
             'either num-layers or encoder-num-layers should be specified'
-        args.num_layers = args.encoder_num_layers 
+        args.num_layers = args.encoder_num_layers
+    if args.decoder_num_layers is None:
+        args.decoder_num_layers = 0
 
     # Batch size.
     assert args.micro_batch_size is not None
@@ -279,6 +281,8 @@ def validate_args(args, defaults={}):
     else:
         assert args.encoder_seq_length is not None
         args.seq_length = args.encoder_seq_length
+    if args.decoder_seq_length is None:
+        args.decoder_seq_length = 0
 
     if args.seq_length is not None:
         assert args.max_position_embeddings >= args.seq_length
@@ -399,7 +403,7 @@ def validate_args(args, defaults={}):
         except ValueError:
             raise RuntimeError(
                 "Invalid plopt_layer_to_device argument: {}".format(e))
-        assert len(args.plopt_layer_to_device) == 2 * args.num_layers, \
+        assert len(args.plopt_layer_to_device) == args.encoder_num_layers + args.decoder_num_layers, \
             "plopt_layer_to_device must have 2 * num_layers entries"
         if not args.plopt_prefetch_planner_num_workers:
             local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 8))
@@ -1253,7 +1257,7 @@ def _add_plopt_args(parser):
                         help='Use our modified memory allocator.')
     group.add_argument('--plopt-reserve-all-memory', action='store_true',
                         help='Reserve all memory before training starts.')
-    group.add_argument('--plopt-zero-stage', type=int, choices=[0,1,2,3],
+    group.add_argument('--plopt-zero-stage', type=int, default=0, choices=[0,1,2,3],
                         help='Zero stage to use. This must match the stage in '
                               'the DeepSpeed config.')
     return parser

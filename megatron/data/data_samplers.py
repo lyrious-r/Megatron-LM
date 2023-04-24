@@ -77,10 +77,16 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
         dp_size = torch.distributed.get_world_size() // \
                     (args.tensor_model_parallel_size * 
                      args.pipeline_model_parallel_size)
+        if dataset.inputs_only:
+            n_encoder_layers = args.num_layers
+            n_decoder_layers = 0
+        else:
+            n_encoder_layers = args.encoder_num_layers
+            n_decoder_layers = args.decoder_num_layers
         training_spec = TrainingSpec(
             args.plopt_cost_model,
             cluster_spec,
-            TransformerModelSpec(args.num_layers, args.num_layers,
+            TransformerModelSpec(n_encoder_layers, n_decoder_layers,
                                 args.hidden_size, args.num_attention_heads,
                                 args.ffn_hidden_size, args.kv_channels),
             dp_size,
@@ -96,6 +102,8 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
         )
         node_rank = torch.distributed.get_rank() // int(os.environ["LOCAL_WORLD_SIZE"])
         node_size = torch.distributed.get_world_size() // int(os.environ["LOCAL_WORLD_SIZE"])
+        encoder_key = "text_enc" if not dataset.inputs_only else "text"
+        decoder_key = "text_dec" if not dataset.inputs_only else None
         joint_dataloader = JointDataLoader(training_spec,
                                         dataset,
                                         dataset.pack_fn,
@@ -110,7 +118,9 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
                                         batch_sampler=batch_sampler,
                                         num_workers=listener_workers,
                                         num_preprocess_workers=buffer_size,
-                                        pin_memory=True)
+                                        pin_memory=True,
+                                        encoder_key=encoder_key,
+                                        decoder_key=decoder_key,)
         return joint_dataloader
 
     # Torch dataloader.
