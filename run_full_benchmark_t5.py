@@ -1,7 +1,7 @@
 import argparse
 import torch
 import multiprocessing as mp
-from run_single_gpu_benchmark import run_benchmark
+from run_single_gpu_benchmark_t5 import run_benchmark
 from tqdm import tqdm
 
 def parse_args():

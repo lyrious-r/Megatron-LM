@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Microbenchmark T5 layers on a single GPU"""
+"""Microbenchmark GPT layers on a single GPU"""
 from functools import partial
 import os
 import pickle
@@ -35,12 +35,15 @@ from megatron.model import DistributedDataParallel as LocalDDP
 from megatron.model import Float16Module
 from megatron.core import mpu
 from megatron.initialize import initialize_megatron, set_jit_fusion_options
-from megatron.model import ModelType, T5Model
+from megatron.model import ModelType, GPTModel
 from megatron.optimizer import Float16OptimizerWithFloat16Params
 from megatron.schedules import backward_step, forward_step
 from megatron.training import setup_model_and_optimizer
 from megatron.utils import average_losses_across_data_parallel_group
+from megatron import get_tokenizer
+from megatron.utils import get_ltor_masks_and_position_ids
 
+ENABLE_MEMORY_TRACE = False
 MEMORY_TRACE_DIR = "./microbench_memory_trace"
 WARMUP_ITERATIONS = 20
 TRACE_AT_ITER = WARMUP_ITERATIONS + 2
@@ -68,7 +71,7 @@ class MBTimer:
 
     def stop(self):
         """Stop the timer."""
-        assert self._started, 'timer is not started'
+        assert self._started, f'timer {self.name} is not started'
         torch.cuda.synchronize()
         elapsed = time.time() - self._start_time
         self._elapsed += elapsed
@@ -179,21 +182,12 @@ stat_recorder = StatRecorder()
 # Benchmark will run multiple stages sequentially. To separate stages, we
 # need to add hooks to the model to record the time and memory usage:
 #              Stages                               Hooks
-#                                 (start timer/memory trace for enc_embedding)
-#   -> Embedding FW (enc tokens)      fw_hook("enc_embedding", "encoder")
-#   -> Forward Encoder                fw_hook("encoder", "dec_embedding")
-#   -> Embedding FW (dec tokens)      fw_hook("dec_embedding", "decoder")
-#   -> Forward Decoder                 fw_hook("decoder", "postprocess")
-#   -> Postprocess FW                    fw_hook("postprocess", None)
-#                                  (start timer/memory trace for postprocess)
-#   -> Postprocess BW                  grad_hook("postprocess", "decoder")
-#   -> Backward Decoder               grad_hook("decoder", "encoder")
-#   (there is no decoder backward embedding since grad is simply accumed)
-#   -> Backward Encoder               grad_hook("encoder", "enc_embedding")
-#   -> Embedding BW (enc tokens)
-#                                   grad hook on embedding weights produce 
-#                                   strange results. we manually stop the
-#                                   timer and record the memory usage.
+#                                   (start timer/memory trace for embedding)
+#   -> Embedding FW                     fw_hook("embedding", "encoder")
+#   -> Forward Encoder                fw_hook("encoder", "postprocess")
+#                                  (start timer/memory trace for encoder bw)
+#   -> Backward Encoder                grad_hook("encoder", "embedding")
+#   -> Embedding BW
 
 def get_fw_hook(stop_name, start_name):
     timers = get_timers()
@@ -253,101 +247,62 @@ def get_grad_hook(stop_name, start_name, n_triggers=1):
         return grad
     return grad_hook
 
-def model_provider(
-    pre_process=True, post_process=True, add_encoder=True, add_decoder=True
-):
+def model_provider(pre_process=True, post_process=True):
     """Build the model."""
 
-    print_rank_0("building T5 model ...")
-    model = T5Model(
+    print_rank_0('building GPT model ...')
+    model = GPTModel(
         num_tokentypes=0,
         parallel_output=True,
         pre_process=pre_process,
         post_process=post_process,
-        add_encoder=add_encoder,
-        add_decoder=add_decoder,
         hooks = {
-            "enc_embedding": get_fw_hook("enc_embedding", "encoder"),
-            "encoder": get_fw_hook("encoder", "dec_embedding"),
-            "dec_embedding": get_fw_hook("dec_embedding", "decoder"),
-            "decoder": get_fw_hook("decoder", "postprocess"),
-            # "postprocess": get_fw_hook("postprocess", None),
-            "postprocess_grad": get_grad_hook("postprocess", "decoder"),
-            "decoder_grad": get_grad_hook("decoder", "encoder", n_triggers=2),  # encoder output and decoder input
-            "encoder_grad": get_grad_hook("encoder", "enc_embedding"),
+            "embedding": get_fw_hook("embedding", "encoder"),
+            "encoder": get_fw_hook("encoder", "postprocess"),
+            "encoder_grad": get_grad_hook("encoder", "embedding"),
         },
     )
     return model
 
-
 def get_batch(data_iterator):
-    """Build the batch."""
+    """Generate a batch"""
+    args = get_args()
+    tokenizer = get_tokenizer()
+
     assert data_iterator is not None
-    microbatch_size, enc_sequence_length, dec_sequence_length = next(
-        data_iterator
-    )
+    microbatch_size, sequence_length = next(data_iterator)
+    # Items and their type.
     datatype = torch.int64
-    # generate random data
+
     data_b = {
-        "text_enc": torch.randint(
-            0, 32000, (microbatch_size, enc_sequence_length), dtype=datatype
-        ),
-        "text_dec": torch.randint(
-            0, 32000, (microbatch_size, dec_sequence_length), dtype=datatype
-        ),
-        "labels": torch.randint(
-            0, 32000, (microbatch_size, dec_sequence_length), dtype=datatype
-        ),
-        "loss_mask": torch.ones(
-            (microbatch_size, dec_sequence_length), dtype=datatype
-        ),
-        "enc_mask": torch.ones(
-            (microbatch_size, enc_sequence_length, enc_sequence_length),
-            dtype=datatype,
-        ),
-        "dec_mask": torch.ones(
-            (microbatch_size, dec_sequence_length, dec_sequence_length),
-            dtype=datatype,
-        ),
-        "enc_dec_mask": torch.ones(
-            (microbatch_size, dec_sequence_length, enc_sequence_length),
-            dtype=datatype,
+        "text": torch.randint(
+            0, 32000, (microbatch_size, sequence_length), dtype=datatype
         ),
     }
-    for k, v in data_b.items():
-        data_b[k] = v.cuda()
+    tokens_ = data_b["text"].long().cuda()
+    labels = tokens_[:, 1:].contiguous()
+    tokens = tokens_[:, :-1].contiguous()
 
-    # Unpack.
-    tokens_enc = data_b["text_enc"].long()
-    tokens_dec = data_b["text_dec"].long()
-    labels = data_b["labels"].long()
-    loss_mask = data_b["loss_mask"].float()
+    # Get the masks and postition ids.
+    attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(
+        tokens,
+        tokenizer.eod,
+        args.reset_position_ids,
+        args.reset_attention_mask,
+        args.eod_mask_loss)
 
-    enc_mask = data_b["enc_mask"] < 0.5
-    dec_mask = data_b["dec_mask"] < 0.5
-    enc_dec_mask = data_b["enc_dec_mask"] < 0.5
-
-    return (
-        tokens_enc,
-        tokens_dec,
-        loss_mask,
-        labels,
-        enc_mask,
-        dec_mask,
-        enc_dec_mask,
-    )
+    return tokens, labels, loss_mask, attention_mask, position_ids
 
 
 def loss_func(loss_mask, output_tensor):
-    lm_loss_ = output_tensor.float()
-    lm_loss = (
-        torch.sum(lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
-    )
+    losses = output_tensor.float()
+    loss_mask = loss_mask.view(-1).float()
+    loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
 
-    loss = lm_loss
-    averaged_losses = average_losses_across_data_parallel_group([lm_loss])
+    # Reduce loss for logging.
+    averaged_loss = average_losses_across_data_parallel_group([loss])
 
-    return loss, {"lm loss": averaged_losses[0]}
+    return loss, {'lm loss': averaged_loss[0]}
 
 
 def forward_step_func(data_iterator, model):
@@ -356,29 +311,14 @@ def forward_step_func(data_iterator, model):
 
     # Get the batch.
     with torch.cuda.nvtx.range("batch_generator"):
-        (
-            tokens_enc,
-            tokens_dec,
-            loss_mask,
-            lm_labels,
-            enc_mask,
-            dec_mask,
-            enc_dec_mask,
-        ) = get_batch(data_iterator)
+        tokens, labels, loss_mask, attention_mask, position_ids = get_batch(
+        data_iterator)
 
     timers = get_timers()
-    start_timer(timers, "forward_enc_embedding")
-    torch.cuda.nvtx.range_push("forward_enc_embedding")
-    # Forward model lm_labels
-    output_tensor = model(
-        tokens_enc,
-        tokens_dec,
-        enc_mask,
-        dec_mask,
-        enc_dec_mask,
-        tokentype_ids=None,
-        lm_labels=lm_labels,
-    )
+    start_timer(timers, "forward_embedding")
+    torch.cuda.nvtx.range_push("forward_embedding")
+    output_tensor = model(tokens, position_ids, attention_mask,
+                          labels=labels)
 
     return output_tensor, partial(loss_func, loss_mask)
 
@@ -388,7 +328,7 @@ def train_shape_provider():
 
     def train_shape_iterator():
         while True:
-            yield args.micro_batch_size, args.encoder_seq_length, args.decoder_seq_length
+            yield args.micro_batch_size, args.seq_length
 
     return train_shape_iterator()
 
@@ -422,7 +362,7 @@ def benchmark_forward_backward_no_pipelining(
         torch.cuda.cudart().cudaProfilerStart()
     start_timer(timers, "forward_total")
     global memory_trace_enabled
-    if iteration == TRACE_AT_ITER:
+    if iteration == TRACE_AT_ITER and ENABLE_MEMORY_TRACE:
         memory_trace_enabled = True
         torch.cuda.memory._record_memory_history(True,
             trace_alloc_max_entries=100000,
@@ -443,8 +383,8 @@ def benchmark_forward_backward_no_pipelining(
     stop_timer(timers, "forward_total")
     if not forward_only:
         start_timer(timers, "backward_total")
-        start_timer(timers, "backward_postprocess")
-        torch.cuda.nvtx.range_push("backward_postprocess")
+        start_timer(timers, "backward_encoder")
+        torch.cuda.nvtx.range_push("backward_encoder")
         if iteration == TRACE_AT_ITER:
             torch.cuda.memory._record_memory_history(True,
                 trace_alloc_max_entries=100000,
@@ -459,14 +399,14 @@ def benchmark_forward_backward_no_pipelining(
             if not os.path.exists(mem_trace_dir):
                 os.makedirs(mem_trace_dir)
             torch.cuda.synchronize()
-            with open(os.path.join(mem_trace_dir, f"backward_enc_embedding.pkl"), 'wb') as f:
+            with open(os.path.join(mem_trace_dir, f"backward_embedding.pkl"), 'wb') as f:
                 snapshot = torch.cuda.memory._snapshot()
                 pickle.dump(snapshot, f)
             # reset
             torch.cuda.memory._record_memory_history(True,
                     trace_alloc_max_entries=100000,
                     trace_alloc_record_context=True,)
-        stop_timer(timers, "backward_enc_embedding")
+        stop_timer(timers, "backward_embedding")
         torch.cuda.nvtx.range_pop()
         stop_timer(timers, "backward_total")
         memory_after_backward = torch.cuda.memory_allocated()
@@ -621,13 +561,12 @@ def get_optimizer_state_size(optimizer):
 
 def get_microbenchmark_name():
     args = get_args()
-    name = "hs{}_ah{}_kv{}_ffhs{}_encsl{}_decsl{}_mbs{}".format(
+    name = "hs{}_ah{}_kv{}_ffhs{}_sl{}_mbs{}".format(
         args.hidden_size,
         args.num_attention_heads,
         args.kv_channels,
         args.ffn_hidden_size,
-        args.encoder_seq_length,
-        args.decoder_seq_length,
+        args.seq_length,
         args.micro_batch_size,
     )
     # add recomputation settings if exist
@@ -695,56 +634,31 @@ def generate_report(n_iters, save_path=None):
 
     _get_stats_and_print("model_embedding_param_size")
     _get_stats_and_print("model_encoder_param_size")
-    _get_stats_and_print("model_decoder_param_size")
-    _get_stats_and_print("model_pooler_param_size")
     _get_stats_and_print("optimizer_state_size")
     _cprint("Activations ", "-")
     _get_stats_and_print("memory_before_forward")
     _get_stats_and_print("memory_after_backward")
     _get_stats_and_print_difference(
-        "memory_after_enc_embedding", "memory_before_forward", "enc_embedding_activation"
+        "memory_after_embedding", "memory_before_forward", "embedding_activation"
     )
     _get_stats_and_print_difference(
-        "peak_memory_after_enc_embedding", "memory_before_forward", "peak_enc_embedding_activation"
+        "peak_memory_after_embedding", "memory_before_forward", "peak_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation", multiplier= 1 / N_ENCODER_LAYERS
+        "memory_after_encoder", "memory_after_embedding", "encoder_activation", multiplier= 1 / N_ENCODER_LAYERS
     )
     _get_stats_and_print_difference(
-        "peak_memory_after_encoder", "memory_after_enc_embedding", "peak_encoder_activation"
-    )
-    _get_stats_and_print_difference(
-        "memory_after_dec_embedding", "memory_after_encoder", "dec_embedding_activation"
-    )
-    _get_stats_and_print_difference(
-        "peak_memory_after_dec_embedding", "memory_after_encoder", "peak_dec_embedding_activation"
-    )
-    _get_stats_and_print_difference(
-        "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation", multiplier= 1 / N_DECODER_LAYERS
-    )
-    _get_stats_and_print_difference(
-        "peak_memory_after_decoder", "memory_after_dec_embedding", "peak_decoder_activation"
-    )
-    _get_stats_and_print_difference(
-        "memory_after_postprocess", "memory_after_decoder", "postprocess_activation"
-    )
-    _get_stats_and_print_difference(
-        "peak_memory_after_postprocess", "memory_after_decoder", "peak_postprocess_activation"
+        "peak_memory_after_encoder", "memory_after_embedding", "peak_encoder_activation"
     )
     _cprint("")
     # execution time summary
     _cprint("Execution Time Summary")
     _get_time_and_print("forward_total")
-    _get_time_and_print("forward_enc_embedding")
+    _get_time_and_print("forward_embedding")
     _get_time_and_print("forward_encoder", multiplier=1 / N_ENCODER_LAYERS)
-    _get_time_and_print("forward_dec_embedding")
-    _get_time_and_print("forward_decoder", multiplier=1 / N_DECODER_LAYERS)
-    _get_time_and_print("forward_postprocess")
     _get_time_and_print("backward_total")
-    _get_time_and_print("backward_postprocess")
-    _get_time_and_print("backward_decoder", multiplier=1 / N_DECODER_LAYERS)
     _get_time_and_print("backward_encoder", multiplier=1 / N_ENCODER_LAYERS)
-    _get_time_and_print("backward_enc_embedding")
+    _get_time_and_print("backward_embedding")
     if f is not None:
         f.close()
 
@@ -808,7 +722,7 @@ def microbenchmark(
         unwrapped_model = unwrap_model(model[0], (torchDDP, LocalDDP, Float16Module))
     else:
         unwrapped_model = unwrap_model(model, (torchDDP, LocalDDP, Float16Module))
-    if isinstance(unwrapped_model, T5Model):
+    if isinstance(unwrapped_model, GPTModel):
         unwrapped_model = unwrapped_model.language_model
 
     # print model parameters and optimizer states in MB
@@ -825,12 +739,6 @@ def microbenchmark(
     if hasattr(unwrapped_model, "encoder"):
         model_encoder_param_size = _get_param_size(unwrapped_model.encoder.parameters())
         stat_recorder.add("model_encoder_param_size", model_encoder_param_size / N_ENCODER_LAYERS)
-    if hasattr(unwrapped_model, "decoder"):
-        model_decoder_param_size = _get_param_size(unwrapped_model.decoder.parameters())
-        stat_recorder.add("model_decoder_param_size", model_decoder_param_size / N_DECODER_LAYERS)
-    if hasattr(unwrapped_model, "pooler"):
-        model_pooler_param_size = _get_param_size(unwrapped_model.pooler.parameters())
-        stat_recorder.add("model_pooler_param_size", model_pooler_param_size)
 
     iteration = 0
     iteration = benchmark_train(
@@ -858,7 +766,7 @@ if __name__ == "__main__":
     microbenchmark(
         train_shape_provider,
         model_provider,
-        ModelType.encoder_and_decoder,
+        ModelType.encoder_or_decoder,
         forward_step_func,
-        args_defaults={"tokenizer_type": "BertWordPieceLowerCase"},
+        args_defaults={"tokenizer_type": "GPT2BPETokenizer"},
     )

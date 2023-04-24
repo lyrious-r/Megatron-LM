@@ -321,7 +321,10 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         try:
             self.pad_id = tokenizer.pad
         except (NotImplementedError, AttributeError):
-            self.pad_id = 0
+            try:
+                self.pad_id = tokenizer.eod
+            except (NotImplementedError, AttributeError):
+                self.pad_id = 0
         try:
             self.bos_id = tokenizer.bos_token_id
         except (NotImplementedError, AttributeError):

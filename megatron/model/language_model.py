@@ -431,6 +431,8 @@ class TransformerLanguageModel(MegatronModule):
                                            tokentype_ids=tokentype_ids)
             if "enc_embedding" in self.hooks:
                 self.hooks["enc_embedding"]()
+            if "embedding" in self.hooks:
+                self.hooks["embedding"]()
 
             if "encoder_grad" in self.hooks:
                 encoder_input.register_hook(self.hooks["encoder_grad"])

@@ -49,7 +49,8 @@ class GPTModel(MegatronModule):
                  num_tokentypes=0,
                  parallel_output=True,
                  pre_process=True,
-                 post_process=True):
+                 post_process=True,
+                 hooks = None):
         super(GPTModel, self).__init__()
         args = get_args()
 
@@ -57,6 +58,7 @@ class GPTModel(MegatronModule):
         self.pre_process = pre_process
         self.post_process = post_process
         self.fp16_lm_cross_entropy = args.fp16_lm_cross_entropy
+        self.hooks = hooks
 
         self.language_model, self._language_model_key = get_language_model(
             num_tokentypes=num_tokentypes,
@@ -66,7 +68,8 @@ class GPTModel(MegatronModule):
             scaled_init_method=scaled_init_method_normal(args.init_method_std,
                                                          args.num_layers),
             pre_process=self.pre_process,
-            post_process=self.post_process)
+            post_process=self.post_process,
+            hooks=hooks)
 
         self.initialize_word_embeddings(init_method_normal)
 
