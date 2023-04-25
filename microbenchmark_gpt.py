@@ -48,8 +48,6 @@ MEMORY_TRACE_DIR = "./microbench_memory_trace"
 WARMUP_ITERATIONS = 20
 TRACE_AT_ITER = WARMUP_ITERATIONS + 2
 BENCHMARK_START_ITER = WARMUP_ITERATIONS + 5
-N_ENCODER_LAYERS = 1
-N_DECODER_LAYERS = 1
 timer_disabled = True
 memory_trace_enabled = False
 grad_hook_trigger_counts = {}
@@ -276,7 +274,7 @@ def get_batch(data_iterator):
 
     data_b = {
         "text": torch.randint(
-            0, 32000, (microbatch_size, sequence_length), dtype=datatype
+            0, 32000, (microbatch_size, sequence_length + 1), dtype=datatype
         ),
     }
     tokens_ = data_b["text"].long().cuda()
@@ -579,6 +577,7 @@ def get_microbenchmark_name():
 
 def generate_report(n_iters, save_path=None):
     timers = get_timers()
+    args = get_args()
 
     f = None
     if save_path is not None:
@@ -645,7 +644,7 @@ def generate_report(n_iters, save_path=None):
         "peak_memory_after_embedding", "memory_before_forward", "peak_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_encoder", "memory_after_embedding", "encoder_activation", multiplier= 1 / N_ENCODER_LAYERS
+        "memory_after_encoder", "memory_after_embedding", "encoder_activation", multiplier= 1 / args.num_layers
     )
     _get_stats_and_print_difference(
         "peak_memory_after_encoder", "memory_after_embedding", "peak_encoder_activation"
@@ -655,9 +654,9 @@ def generate_report(n_iters, save_path=None):
     _cprint("Execution Time Summary")
     _get_time_and_print("forward_total")
     _get_time_and_print("forward_embedding")
-    _get_time_and_print("forward_encoder", multiplier=1 / N_ENCODER_LAYERS)
+    _get_time_and_print("forward_encoder", multiplier=1 / args.num_layers)
     _get_time_and_print("backward_total")
-    _get_time_and_print("backward_encoder", multiplier=1 / N_ENCODER_LAYERS)
+    _get_time_and_print("backward_encoder", multiplier=1 / args.num_layers)
     _get_time_and_print("backward_embedding")
     if f is not None:
         f.close()
@@ -738,7 +737,7 @@ def microbenchmark(
         )
     if hasattr(unwrapped_model, "encoder"):
         model_encoder_param_size = _get_param_size(unwrapped_model.encoder.parameters())
-        stat_recorder.add("model_encoder_param_size", model_encoder_param_size / N_ENCODER_LAYERS)
+        stat_recorder.add("model_encoder_param_size", model_encoder_param_size / args.num_layers)
 
     iteration = 0
     iteration = benchmark_train(

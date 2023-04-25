@@ -45,8 +45,6 @@ MEMORY_TRACE_DIR = "./microbench_memory_trace"
 WARMUP_ITERATIONS = 20
 TRACE_AT_ITER = WARMUP_ITERATIONS + 2
 BENCHMARK_START_ITER = WARMUP_ITERATIONS + 5
-N_ENCODER_LAYERS = 1
-N_DECODER_LAYERS = 1
 timer_disabled = True
 memory_trace_enabled = False
 grad_hook_trigger_counts = {}
@@ -640,6 +638,7 @@ def get_microbenchmark_name():
 
 def generate_report(n_iters, save_path=None):
     timers = get_timers()
+    args = get_args()
 
     f = None
     if save_path is not None:
@@ -708,7 +707,7 @@ def generate_report(n_iters, save_path=None):
         "peak_memory_after_enc_embedding", "memory_before_forward", "peak_enc_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation", multiplier= 1 / N_ENCODER_LAYERS
+        "memory_after_encoder", "memory_after_enc_embedding", "encoder_activation", multiplier= 1 / args.encoder_num_layers
     )
     _get_stats_and_print_difference(
         "peak_memory_after_encoder", "memory_after_enc_embedding", "peak_encoder_activation"
@@ -720,7 +719,7 @@ def generate_report(n_iters, save_path=None):
         "peak_memory_after_dec_embedding", "memory_after_encoder", "peak_dec_embedding_activation"
     )
     _get_stats_and_print_difference(
-        "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation", multiplier= 1 / N_DECODER_LAYERS
+        "memory_after_decoder", "memory_after_dec_embedding", "decoder_activation", multiplier= 1 / args.decoder_num_layers
     )
     _get_stats_and_print_difference(
         "peak_memory_after_decoder", "memory_after_dec_embedding", "peak_decoder_activation"
@@ -736,14 +735,14 @@ def generate_report(n_iters, save_path=None):
     _cprint("Execution Time Summary")
     _get_time_and_print("forward_total")
     _get_time_and_print("forward_enc_embedding")
-    _get_time_and_print("forward_encoder", multiplier=1 / N_ENCODER_LAYERS)
+    _get_time_and_print("forward_encoder", multiplier=1 / args.encoder_num_layers)
     _get_time_and_print("forward_dec_embedding")
-    _get_time_and_print("forward_decoder", multiplier=1 / N_DECODER_LAYERS)
+    _get_time_and_print("forward_decoder", multiplier=1 / args.decoder_num_layers)
     _get_time_and_print("forward_postprocess")
     _get_time_and_print("backward_total")
     _get_time_and_print("backward_postprocess")
-    _get_time_and_print("backward_decoder", multiplier=1 / N_DECODER_LAYERS)
-    _get_time_and_print("backward_encoder", multiplier=1 / N_ENCODER_LAYERS)
+    _get_time_and_print("backward_decoder", multiplier=1 / args.decoder_num_layers)
+    _get_time_and_print("backward_encoder", multiplier=1 / args.encoder_num_layers)
     _get_time_and_print("backward_enc_embedding")
     if f is not None:
         f.close()
@@ -824,10 +823,10 @@ def microbenchmark(
         )
     if hasattr(unwrapped_model, "encoder"):
         model_encoder_param_size = _get_param_size(unwrapped_model.encoder.parameters())
-        stat_recorder.add("model_encoder_param_size", model_encoder_param_size / N_ENCODER_LAYERS)
+        stat_recorder.add("model_encoder_param_size", model_encoder_param_size / args.encoder_num_layers)
     if hasattr(unwrapped_model, "decoder"):
         model_decoder_param_size = _get_param_size(unwrapped_model.decoder.parameters())
-        stat_recorder.add("model_decoder_param_size", model_decoder_param_size / N_DECODER_LAYERS)
+        stat_recorder.add("model_decoder_param_size", model_decoder_param_size / args.decoder_num_layers)
     if hasattr(unwrapped_model, "pooler"):
         model_pooler_param_size = _get_param_size(unwrapped_model.pooler.parameters())
         stat_recorder.add("model_pooler_param_size", model_pooler_param_size)

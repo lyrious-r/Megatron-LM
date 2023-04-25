@@ -1260,5 +1260,8 @@ def _add_plopt_args(parser):
     group.add_argument('--plopt-zero-stage', type=int, default=0, choices=[0,1,2,3],
                         help='Zero stage to use. This must match the stage in '
                               'the DeepSpeed config.')
+    group.add_argument('--plopt-seqlen-offset', type=int, default=0,
+                        help='Amount of token to subtract out of the final sequence length. '
+                             'Set to 1 if running GPT.')
     return parser
 

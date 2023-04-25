@@ -27,5 +27,7 @@ _memory_viz.py
 /memory_debug*/*
 /trace_debug*/*
 /plopt_ep_stats*/*
+/test_*_debug_*/*
 /_*.ipynb
 /experiments/*
+microbenchmark_*.log

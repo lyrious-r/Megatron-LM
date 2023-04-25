@@ -45,7 +45,13 @@ def get_batch(data_iterator):
         data = next(data_iterator)
     else:
         data = None
-    data_b = tensor_parallel.broadcast_data(keys, data, datatype)
+
+    if get_args().tensor_model_parallel_size > 1:
+        data_b = tensor_parallel.broadcast_data(keys, data, datatype)
+    else:
+        data_b = {}
+        for key, value in data.items():
+            data_b[key] = value.cuda(non_blocking=True)
 
     # Unpack.
     tokens_ = data_b['text'].long()
@@ -63,14 +69,16 @@ def get_batch(data_iterator):
     return tokens, labels, loss_mask, attention_mask, position_ids
 
 def loss_func(loss_mask, output_tensor):
+    args = get_args()
     losses = output_tensor.float()
     loss_mask = loss_mask.view(-1).float()
     loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
 
-    # Reduce loss for logging.
-    averaged_loss = average_losses_across_data_parallel_group([loss])
-
-    return loss, {'lm loss': averaged_loss[0]}
+    if not args.use_plopt:
+        averaged_losses = average_losses_across_data_parallel_group([loss])
+        return loss, {'lm loss': averaged_losses[0]}
+    else:
+        return loss, {'lm loss': loss}
 
 
 def forward_step(data_iterator, model):

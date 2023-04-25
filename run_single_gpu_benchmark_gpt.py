@@ -1,3 +1,4 @@
+import sys
 import argparse
 import subprocess
 from pathlib import Path
@@ -13,7 +14,7 @@ CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        microbenchmark_gpt.py \
        --tensor-model-parallel-size 1 \
        --pipeline-model-parallel-size 1 \
-       --num-layers 1 \
+       --num-layers {} \
        --hidden-size {} \
        --num-attention-heads {} \
        --kv-channels {} \
@@ -65,6 +66,13 @@ def parse_args():
         type=int,
         required=True,
         help="Micro batch size",
+    )
+    parser.add_argument(
+        "-n",
+        "--num-layers",
+        type=int,
+        required=True,
+        help="Number of layers",
     )
     parser.add_argument(
         "-rc",
@@ -122,6 +130,7 @@ def parse_args():
 def run_benchmark(
     seqlen,
     microbatch_size,
+    n_layers,
     output_dir,
     device=0,
     benchmark_iters=50,
@@ -137,6 +146,7 @@ def run_benchmark(
     cmd = CMD_TEMPLATE.format(
         device,
         distributed_args,
+        n_layers,
         hidden_size,
         n_attn_heads,
         kv_channels,
@@ -158,16 +168,18 @@ def run_benchmark(
 
     if log_file:
         with open(log_file, "a") as f:
-            subprocess.run(cmd, shell=True, stderr=f, stdout=f)
+            p = subprocess.run(cmd, shell=True, stderr=f, stdout=f)
     else:
-        subprocess.run(cmd, shell=True) #, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        p = subprocess.run(cmd, shell=True) #, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    return p.returncode
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run_benchmark(
+    retval = run_benchmark(
         args.seq_length,
         args.micro_batch_size,
+        args.num_layers,
         args.output_dir,
         args.device,
         args.benchmark_iters,
@@ -178,3 +190,4 @@ if __name__ == "__main__":
         args.recompute_type,
         args.use_flash_attn,
     )
+    sys.exit(retval)

@@ -16,14 +16,17 @@ def _profile_func(queue: mp.Queue, gpu_index, assigned_mbs, assigned_enc_seqlen,
         for enc_seqlen in assigned_enc_seqlen:
             for dec_seqlen in assigned_dec_seqlen:
                 for recompute_type in assigned_recompute_type:
-                    run_benchmark(
-                        enc_seqlen, dec_seqlen, mbs, 
-                        output_dir=out_dir,
-                        device=gpu_index,
-                        recompute_type=recompute_type,
-                        use_flash_attn=False,
-                        log_file=f"microbenchmark_{gpu_index}.log"
-                    )
+                    for n_layers in [2, 1]:
+                        retcode = run_benchmark(
+                            enc_seqlen, dec_seqlen, mbs, n_layers, n_layers,
+                            output_dir=out_dir,
+                            device=gpu_index,
+                            recompute_type=recompute_type,
+                            use_flash_attn=False,
+                            log_file=f"microbenchmark_{gpu_index}.log"
+                        )
+                        if retcode == 0:
+                            break
                     queue.put("Progress")
 
 if __name__ == "__main__":
