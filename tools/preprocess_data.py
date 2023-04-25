@@ -82,6 +82,9 @@ class Encoder(object):
 def get_args():
     parser = argparse.ArgumentParser()
     group = parser.add_argument_group(title='input data')
+    group.add_argument('--n-samples', type=int, default=None,
+                       help="If provided, subsample the dataset to contain "
+                            "only n-samples samples. Default: None.")
     group.add_argument('--input', type=str, required=True,
                        help='Path to input JSON')
     group.add_argument('--json-keys', nargs='+', default=['text'],
@@ -136,6 +139,31 @@ def get_args():
 
     return args
 
+import random
+from tqdm import tqdm
+
+def index_sample(iterable, n):
+    """
+    Returns @param n random items from @param iterable.
+    """
+    reservoir = []
+    for t, item in tqdm(enumerate(iterable)):
+        if t < n:
+            reservoir.append(t)
+        else:
+            m = random.randint(0,t)
+            if m < n:
+                reservoir[m] = t
+    return set(reservoir)
+
+def subsampled_stream_iterator(indices: set, iterable):
+    if indices is None:
+        yield from iterable
+        return
+    for i, item in enumerate(iterable):
+        if i in indices:
+            yield item
+
 def main():
     args = get_args()
     startup_start = time.time()
@@ -146,10 +174,32 @@ def main():
     if nltk_available and args.split_sentences:
         nltk.download("punkt", quiet=True)
 
+    if args.n_samples is not None:
+        import pickle
+        print("Subsampling...")
+        output_dirname = os.path.dirname(args.output_prefix)
+        output_fn = os.path.basename(args.output_prefix)
+        if output_fn.endswith('_t5') or output_fn.endswith('_gpt'):
+            output_fn = output_fn.rsplit('_', maxsplit=1)[0]
+        sample_fn = os.path.join(output_dirname, "{}_s{}.idx".format(output_fn, args.n_samples))
+        if os.path.exists(sample_fn):
+            print("Loading sampled index from {}...".format(sample_fn))
+            with open(sample_fn, 'rb') as f:
+                indices = pickle.load(f)
+        else:
+            indices = index_sample(fin, args.n_samples)
+            print("Writing sampled index to {}...".format(sample_fn))
+            with open(sample_fn, 'wb') as f:
+                pickle.dump(indices, f)
+            fin.seek(0)
+        print("Subsampled", len(indices), "lines.")
+    else:
+        indices = None
+
     encoder = Encoder(args)
     tokenizer = build_tokenizer(args)
     pool = multiprocessing.Pool(args.workers, initializer=encoder.initializer)
-    encoded_docs = pool.imap(encoder.encode, fin, args.chunk_size)
+    encoded_docs = pool.imap(encoder.encode, subsampled_stream_iterator(indices, fin), args.chunk_size)
     #encoded_docs = map(encoder.encode, fin)
 
     level = "document"
@@ -181,7 +231,11 @@ def main():
             if len(sentences) == 0:
                 print(f"WARNING: encountered empty document {i}.")
                 if args.is_supervised:
-                    builders[key].add_item(torch.IntTensor([tokenizer.pad]))
+                    try:
+                        pad_token = tokenizer.pad
+                    except:
+                        pad_token = tokenizer.eod
+                    builders[key].add_item(torch.IntTensor([pad_token]))
                     builders[key].end_document()
                 continue
             for sentence in sentences:
