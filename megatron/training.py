@@ -172,6 +172,7 @@ def pretrain(train_valid_test_dataset_provider,
     print_datetime('after training is done')
     print("Taking poison pill...", flush=True)
     os.system("pkill -f 'pretrain_t5'")
+    os.system("pkill -f 'pretrain_gpt'")
 
     if args.do_valid:
         prefix = 'the end of training for val data'

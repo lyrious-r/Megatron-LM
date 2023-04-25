@@ -6,7 +6,7 @@ from string import Template
 from typing import Optional
 
 EXP_CONFIG_DIR = "./experiment_configs"
-TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_t5.template")
+TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_{}.template")
 DEEPSPEED_TEMPLATE_PATH = os.path.join(
     EXP_CONFIG_DIR, "deepspeed_config.template"
 )
@@ -127,6 +127,9 @@ def _add_model_args(parser):
     )
     # if model_config is not specified, require the following args
     group.add_argument(
+        "--num_layers", type=int, help="Number of layers in the model."
+    )
+    group.add_argument(
         "--encoder_num_layers", type=int, help="Number of encoder layers."
     )
     group.add_argument(
@@ -154,6 +157,7 @@ def _add_data_args(parser):
         "--targets_data_path", type=str, help="Path to target dataset."
     )
     group.add_argument("--vocab_file", type=str, help="Path to vocab file.")
+    group.add_argument("--merge_file", type=str, help="Path to merge file.")
     return parser, group
 
 
@@ -164,6 +168,7 @@ def _add_training_args(parser):
         type=str,
         help="Load training spec from config file.",
     )
+    group.add_argument("--seq_length", type=int, help="Max sequence length.")
     group.add_argument(
         "--encoder_seq_length", type=int, help="Max encoder sequence length."
     )
@@ -253,18 +258,24 @@ def _check_training_args(args):
                 "when enable_deepspeed is True."
             )
     # automatically set max_pos_embeddings
-    args.max_pos_embeddings = max(
-        args.encoder_seq_length, args.decoder_seq_length
-    )
+    if args.model_type == "gpt":
+        args.max_pos_embeddings = args.seq_length
+    else:
+        args.max_pos_embeddings = max(
+            args.encoder_seq_length, args.decoder_seq_length
+        )
     if args.enable_plopt:
         # micro batch size/global batch size is not used
         # make it 1 so it does not interfere with the check in Megatron-LM
         args.micro_batch_size = 1
     else:
         # check micro_batch_size and global_batch_size
-        effective_tokens_per_sequence = (
-            args.encoder_seq_length + args.decoder_seq_length
-        )
+        if args.model_type == "t5":
+            effective_tokens_per_sequence = (
+                args.encoder_seq_length + args.decoder_seq_length
+            )
+        else:
+            effective_tokens_per_sequence = args.seq_length
         expected_global_batch_size = (
             args.tokens_per_global_batch // effective_tokens_per_sequence
         )
@@ -345,11 +356,16 @@ def _add_plopt_args(parser):
 
 
 def _check_logging_args(args):
-    exp_spec_name = "encsl{}_decsl{}_gbs{}".format(
-        args.encoder_seq_length,
-        args.decoder_seq_length,
-        args.tokens_per_global_batch,
-    )
+    if args.model_type == "gpt":
+        exp_spec_name = "sl{}_gbs{}".format(
+            args.seq_length, args.tokens_per_global_batch
+        )
+    else:
+        exp_spec_name = "encsl{}_decsl{}_gbs{}".format(
+            args.encoder_seq_length,
+            args.decoder_seq_length,
+            args.tokens_per_global_batch,
+        )
     if args.enable_deepspeed:
         if not args.enable_plopt:
             exp_spec_name += "_mbs{}_rc{}".format(
@@ -446,7 +462,7 @@ def _create_deepspeed_config(args, exp_logging_dir):
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser("Experiment runner for T5 model.")
+    parser = argparse.ArgumentParser("Experiment runner for T5 and GPT.")
     parser.add_argument(
         "--experiment_name",
         type=str,
@@ -457,6 +473,13 @@ def _parse_args():
         "--stdout_stderr_log",
         type=str,
         help="Path to the stdout/stderr log file.",
+    )
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        required=True,
+        choices=["t5", "gpt"],
+        help="Type of model to benchmark on.",
     )
     parser, cluster_group = _add_cluster_args(parser)
     parser, model_group = _add_model_args(parser)
@@ -487,13 +510,29 @@ def _parse_args():
 
     # load config files
     _postprocess_group_args(args, cluster_group, "cluster_config")
-    _postprocess_group_args(args, model_group, "model_config")
-    _postprocess_group_args(args, data_group, "data_config")
+    _postprocess_group_args(
+        args,
+        model_group,
+        "model_config",
+        optional_args=(
+            ["num_layers"]
+            if args.model_type == "t5"
+            else ["encoder_num_layers", "decoder_num_layers"]
+        ),
+    )
+    _postprocess_group_args(
+        args,
+        data_group,
+        "data_config",
+        optional_args=["merge_file"] if args.model_type == "t5" else None,
+    )
     _postprocess_group_args(
         args,
         training_group,
         "training_config",
-        optional_args=["deepspeed_zero_stage"],
+        optional_args=["deepspeed_zero_stage"] + ["seq_length"]
+        if args.model_type == "t5"
+        else ["encoder_seq_length", "decoder_seq_length"],
     )
     _postprocess_group_args(
         args,
@@ -517,9 +556,12 @@ def _parse_args():
 
 def _get_shell_script(args):
     # construct pipeline_args
-    pipeline_args = (
-        f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
-    )
+    if args.model_type == "t5":
+        pipeline_args = (
+            f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
+        )
+    else:
+        pipeline_args = ""
     # construct recompute args
     if args.recompute_level == "none":
         recompute_args = ""
@@ -557,6 +599,8 @@ def _get_shell_script(args):
             "--plopt-reserve-all-memory",
             "--plopt-custom-allocator",
         ]
+        if args.model_type == "gpt":
+            plopt_args.append("--plopt-seqlen-offset 1")
         plopt_args = " ".join(plopt_args)
     # construct deepspeed args
     if not args.enable_deepspeed:
@@ -577,7 +621,7 @@ def _get_shell_script(args):
             "deepspeed_args": deepspeed_args,
         }
     )
-    with open(TEMPLATE_PATH, "r") as f:
+    with open(TEMPLATE_PATH.format(args.model_type), "r") as f:
         template = Template(f.read())
     return template.substitute(template_args)
 

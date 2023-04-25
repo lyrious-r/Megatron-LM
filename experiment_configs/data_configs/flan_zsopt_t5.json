@@ -1,0 +1,5 @@
+{
+    "data_path": "./datasets/flan_zsopt_t5_inputs_document",
+    "targets_data_path": "./datasets/flan_zsopt_t5_targets_document",
+    "vocab_file": "./vocabs/t5-base-vocab.txt"
+}
