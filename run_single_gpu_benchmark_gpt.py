@@ -21,7 +21,7 @@ CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        --seq-length {} \
        --micro-batch-size {} \
        --global-batch-size 4096 \
-       --max-position-embeddings 8192 \
+       --max-position-embeddings 65536 \
        --no-async-tensor-model-parallel-allreduce \
        --train-iters {} \
        --train-epochs 1 \
