@@ -1,4 +1,5 @@
 import sys
+import os
 import argparse
 import subprocess
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 MASTER_PORT = 8000
 MLM_DIR = Path(__file__).parent
 VOCAB_FILE = MLM_DIR / "vocabs" / "t5-base-vocab.txt"
-DISTRIBUTED_ARGS = "--nproc_per_node 1 --nnodes 1 --node_rank 0 --master_addr localhost --master_port {} --use-env"
+DISTRIBUTED_ARGS = "--nproc_per_node {} --nnodes 1 --node_rank 0 --master_addr localhost --master_port {} --use-env"
 
 CMD_TEMPLATE = """
 CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
@@ -147,6 +148,25 @@ def parse_args():
     args.devices = [int(d) for d in args.devices.split(",")]
     return args
 
+def get_microbenchmark_name(tp_size, hidden_size, num_attention_heads,
+                            kv_channels, ffn_hidden_size, encoder_seq_length,
+                            decoder_seq_length, micro_batch_size, recompute_type):
+    name = "tp{}_hs{}_ah{}_kv{}_ffhs{}_encsl{}_decsl{}_mbs{}".format(
+        tp_size,
+        hidden_size,
+        num_attention_heads,
+        kv_channels,
+        ffn_hidden_size,
+        encoder_seq_length,
+        decoder_seq_length,
+        micro_batch_size,
+    )
+    # add recomputation settings if exist
+    if recompute_type != "None":
+        name += "_rc_{}".format(recompute_type.lower())
+        if recompute_type == "Full":
+            name += "_{}".format("uniform")
+    return name
 
 def run_benchmark(
     tp_size,
@@ -167,7 +187,23 @@ def run_benchmark(
     log_file=None,
 ):
     assert len(devices) >= 1, "Must have at least one device"
-    distributed_args = DISTRIBUTED_ARGS.format(MASTER_PORT + devices[0])
+    output_fn = "microbench_" + get_microbenchmark_name(
+        tp_size,
+        hidden_size,
+        n_attn_heads,
+        kv_channels,
+        ffn_hidden_size,
+        enc_seqlen,
+        dec_seqlen,
+        microbatch_size,
+        recompute_type,
+    ) + ".txt"
+    output_path = os.path.join(output_dir, output_fn)
+    if os.path.exists(output_path):
+        # skip if already exists
+        return 0
+
+    distributed_args = DISTRIBUTED_ARGS.format(tp_size, MASTER_PORT + devices[0])
     cmd = CMD_TEMPLATE.format(
         ",".join([str(d) for d in devices]),
         distributed_args,

@@ -46,7 +46,7 @@ class BenchmarkConfig:
             self.mbs >= other.mbs
             and self.enc_seqlen >= other.enc_seqlen
             and self.dec_seqlen >= other.dec_seqlen
-            and RC_MAP[self.rc] >= RC_MAP[other.rc]
+            and RC_MAP[self.rc] <= RC_MAP[other.rc]
         ):
             return True
 
