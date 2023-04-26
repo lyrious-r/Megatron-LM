@@ -41,6 +41,7 @@ from megatron.schedules import backward_step, forward_step
 from megatron.training import setup_model_and_optimizer
 from megatron.utils import average_losses_across_data_parallel_group
 
+ENABLE_MEMORY_TRACE = False
 MEMORY_TRACE_DIR = "./microbench_memory_trace"
 WARMUP_ITERATIONS = 20
 TRACE_AT_ITER = WARMUP_ITERATIONS + 2
@@ -420,7 +421,7 @@ def benchmark_forward_backward_no_pipelining(
         torch.cuda.cudart().cudaProfilerStart()
     start_timer(timers, "forward_total")
     global memory_trace_enabled
-    if iteration == TRACE_AT_ITER:
+    if iteration == TRACE_AT_ITER and ENABLE_MEMORY_TRACE:
         memory_trace_enabled = True
         torch.cuda.memory._record_memory_history(True,
             trace_alloc_max_entries=100000,

@@ -2,6 +2,7 @@ import argparse
 import math
 import multiprocessing as mp
 import os
+from dataclasses import dataclass
 
 import torch
 from tqdm import tqdm
@@ -23,6 +24,33 @@ def parse_args():
     return args
 
 
+RC_MAP = {
+    "None": 0,
+    "Selective": 1,
+    "Full": 2,
+}
+
+
+@dataclass(eq=True)
+class BenchmarkConfig:
+    mbs: int
+    enc_seqlen: int
+    dec_seqlen: int
+    rc: str
+
+    def dominates(self, other):
+        assert isinstance(
+            other, BenchmarkConfig
+        ), "Can only compare with BenchmarkConfig"
+        if (
+            self.mbs >= other.mbs
+            and self.enc_seqlen >= other.enc_seqlen
+            and self.dec_seqlen >= other.dec_seqlen
+            and RC_MAP[self.rc] >= RC_MAP[other.rc]
+        ):
+            return True
+
+
 def _profile_func(
     queue: mp.Queue,
     tp_size,
@@ -34,28 +62,43 @@ def _profile_func(
     out_dir,
     log_dir,
 ):
+    oom_configs = []
     for mbs in assigned_mbs:
         for enc_seqlen in assigned_enc_seqlen:
             for dec_seqlen in assigned_dec_seqlen:
                 for recompute_type in assigned_recompute_type:
-                    for n_layers in [2, 1]:
-                        retcode = run_benchmark(
-                            tp_size,
-                            enc_seqlen,
-                            dec_seqlen,
-                            mbs,
-                            n_layers,
-                            n_layers,
-                            output_dir=out_dir,
-                            devices=devices,
-                            recompute_type=recompute_type,
-                            use_flash_attn=False,
-                            log_file=os.path.join(
-                                log_dir, f"microbenchmark_{devices}.log"
-                            ),
-                        )
-                        if retcode == 0:
+                    current_config = BenchmarkConfig(
+                        mbs, enc_seqlen, dec_seqlen, recompute_type
+                    )
+                    should_skip = False
+                    for past_oom in oom_configs:
+                        if current_config.dominates(past_oom):
+                            # skip this config since it must also oom
+                            should_skip = True
                             break
+                    if not should_skip:
+                        oom = True
+                        for n_layers in [2, 1]:
+                            retcode = run_benchmark(
+                                tp_size,
+                                enc_seqlen,
+                                dec_seqlen,
+                                mbs,
+                                n_layers,
+                                n_layers,
+                                output_dir=out_dir,
+                                devices=devices,
+                                recompute_type=recompute_type,
+                                use_flash_attn=False,
+                                log_file=os.path.join(
+                                    log_dir, f"microbenchmark_{devices}.log"
+                                ),
+                            )
+                            if retcode == 0:
+                                oom = False
+                                break
+                        if oom:
+                            oom_configs.append(current_config)
                     queue.put("Progress")
 
 
@@ -67,8 +110,34 @@ if __name__ == "__main__":
         2**i for i in range(math.floor(math.log2(n_gpus)) + 1)
     ]
     candidate_mbs = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-    candidate_enc_seqlen = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
-    candidate_dec_seqlen = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    candidate_enc_seqlen = [
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+    ]
+    candidate_dec_seqlen = [
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+    ]
     candidate_recompute_type = ["None", "Selective", "Full"]
 
     subprocesses = []

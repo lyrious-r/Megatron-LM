@@ -2,6 +2,7 @@ import argparse
 import math
 import multiprocessing as mp
 import os
+from dataclasses import dataclass
 
 import torch
 from tqdm import tqdm
@@ -23,6 +24,31 @@ def parse_args():
     return args
 
 
+RC_MAP = {
+    "None": 0,
+    "Selective": 1,
+    "Full": 2,
+}
+
+
+@dataclass(eq=True)
+class BenchmarkConfig:
+    mbs: int
+    seqlen: int
+    rc: str
+
+    def dominates(self, other):
+        assert isinstance(
+            other, BenchmarkConfig
+        ), "Can only compare with BenchmarkConfig"
+        if (
+            self.mbs >= other.mbs
+            and self.seqlen >= other.seqlen
+            and RC_MAP[self.rc] >= RC_MAP[other.rc]
+        ):
+            return True
+
+
 def _profile_func(
     queue: mp.Queue,
     tp_size,
@@ -33,25 +59,38 @@ def _profile_func(
     out_dir,
     log_dir,
 ):
+    oom_configs = []
     for mbs in assigned_mbs:
         for seqlen in assigned_seqlen:
             for recompute_type in assigned_recompute_type:
-                for n_layers in [3, 2, 1]:
-                    retcode = run_benchmark(
-                        tp_size,
-                        seqlen,
-                        mbs,
-                        n_layers,
-                        output_dir=out_dir,
-                        devices=devices,
-                        recompute_type=recompute_type,
-                        use_flash_attn=False,
-                        log_file=os.path.join(
-                            log_dir, f"microbenchmark_{devices}.log"
-                        ),
-                    )
-                    if retcode == 0:
+                current_config = BenchmarkConfig(mbs, seqlen, recompute_type)
+                should_skip = False
+                for past_oom in oom_configs:
+                    if current_config.dominates(past_oom):
+                        # skip this config since it must also oom
+                        should_skip = True
                         break
+                if not should_skip:
+                    oom = True
+                    for n_layers in [3, 2, 1]:
+                        retcode = run_benchmark(
+                            tp_size,
+                            seqlen,
+                            mbs,
+                            n_layers,
+                            output_dir=out_dir,
+                            devices=devices,
+                            recompute_type=recompute_type,
+                            use_flash_attn=False,
+                            log_file=os.path.join(
+                                log_dir, f"microbenchmark_{devices}.log"
+                            ),
+                        )
+                        if retcode == 0:
+                            oom = False
+                            break
+                    if oom:
+                        oom_configs.append(current_config)
                 queue.put("Progress")
 
 

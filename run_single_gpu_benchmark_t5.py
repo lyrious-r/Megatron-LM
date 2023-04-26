@@ -1,8 +1,11 @@
 import sys
 import argparse
 import subprocess
+from pathlib import Path
 
 MASTER_PORT = 8000
+MLM_DIR = Path(__file__).parent
+VOCAB_FILE = MLM_DIR / "vocabs" / "t5-base-vocab.txt"
 DISTRIBUTED_ARGS = "--nproc_per_node 1 --nnodes 1 --node_rank 0 --master_addr localhost --master_port {} --use-env"
 
 CMD_TEMPLATE = """
@@ -25,8 +28,10 @@ CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        --train-iters {} \
        --train-epochs 1 \
        --lr-decay-iters 100 \
-       --vocab-file /root/t5-base-vocab.txt \
-       --data-impl mmap \
+""" \
++ """  --vocab-file {} \
+""".format(VOCAB_FILE) \
++ """  --data-impl mmap \
        --split 949,50,1 \
        --lr 0.0001 \
        --min-lr 0.00001 \
