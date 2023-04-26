@@ -9,6 +9,7 @@ import sys
 import time
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
+import numpy as np
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 
@@ -47,6 +48,7 @@ from megatron.utils import average_losses_across_data_parallel_group
 from .pipeline_executor import get_pipeline_executor
 
 from plopt.memory_opt.utils import reserve_full_memory
+from plopt.pipe.instructions import ExecutionPlan
 
 DEBUG_DUMP_MEMORY_STATS = os.getenv("PLOPT_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
 DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('PLOPT_DEBUG_DUMP_MEMORY_PREFIX', None)
@@ -654,14 +656,42 @@ def plopt_train_step(data_iterator, forward_step_func,
         microbatch_iterator = []
         execution_plan = None
         for iterator in data_iterator:
-            mb, ep = next(iterator)
-            microbatch_iterator.append(iter(mb))
+            if iterator is not None:
+                mb, ep = next(iterator)
+                microbatch_iterator.append(iter(mb))
+            else:
+                microbatch_iterator.append(None)
             # execution plan should be the same for all iterators
             if execution_plan is None:
                 execution_plan = ep
     else:
-        microbatch, execution_plan = next(data_iterator)
-        microbatch_iterator = iter(microbatch)
+        if data_iterator is not None:
+            microbatch, execution_plan = next(data_iterator)
+            microbatch_iterator = iter(microbatch)
+        else:
+            microbatch_iterator = None
+            execution_plan = None
+    if args.tensor_model_parallel_size > 1:
+        # broadcast execution plan across tp groups
+        if mpu.get_tensor_model_parallel_rank() == 0:
+            assert execution_plan is not None
+            execution_plan: ExecutionPlan
+            ep_bytes = execution_plan.serialize()
+            size = torch.LongTensor([len(ep_bytes)]).cuda()
+            torch.distributed.broadcast(size, mpu.get_tensor_model_parallel_src_rank(),
+                                        group=mpu.get_tensor_model_parallel_group())
+            ep_tensor = torch.frombuffer(np.fromstring(ep_bytes, dtype=np.uint8), dtype=torch.uint8).cuda()
+            torch.distributed.broadcast(ep_tensor, mpu.get_tensor_model_parallel_src_rank(),
+                                        group=mpu.get_tensor_model_parallel_group())
+        else:
+            size = torch.LongTensor([0]).cuda()
+            torch.distributed.broadcast(size, mpu.get_tensor_model_parallel_src_rank(),
+                                        group=mpu.get_tensor_model_parallel_group())
+            ep_tensor = torch.zeros(size.cpu().item(), dtype=torch.uint8).cuda()
+            torch.distributed.broadcast(ep_tensor, mpu.get_tensor_model_parallel_src_rank(),
+                                        group=mpu.get_tensor_model_parallel_group())
+            execution_plan = ExecutionPlan.deserialize(ep_tensor.cpu().numpy().tobytes())
+    assert execution_plan is not None
     executor = get_pipeline_executor(forward_step_func, microbatch_iterator, model, optimizer)
     executor.execute(execution_plan, args.curr_iteration)
     losses_reduced = executor.forward_data_store

@@ -356,12 +356,18 @@ def _add_plopt_args(parser):
 
 
 def _check_logging_args(args):
+    nranks = args.nnodes * args.gpus_per_node
+    pp_times_tp = args.tensor_parallel_size * args.pipeline_parallel_size
+    dp_size = nranks // pp_times_tp
+    exp_spec_name = "dp{}_tp{}_pp{}".format(
+        dp_size, args.tensor_parallel_size, args.pipeline_parallel_size
+    )
     if args.model_type == "gpt":
-        exp_spec_name = "sl{}_gbs{}".format(
+        exp_spec_name += "_sl{}_gbs{}".format(
             args.seq_length, args.tokens_per_global_batch
         )
     else:
-        exp_spec_name = "encsl{}_decsl{}_gbs{}".format(
+        exp_spec_name += "_encsl{}_decsl{}_gbs{}".format(
             args.encoder_seq_length,
             args.decoder_seq_length,
             args.tokens_per_global_batch,
