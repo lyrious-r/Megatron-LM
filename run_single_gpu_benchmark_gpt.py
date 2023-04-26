@@ -12,7 +12,7 @@ DISTRIBUTED_ARGS = "--nproc_per_node 1 --nnodes 1 --node_rank 0 --master_addr lo
 CMD_TEMPLATE = """
 CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        microbenchmark_gpt.py \
-       --tensor-model-parallel-size 1 \
+       --tensor-model-parallel-size {} \
        --pipeline-model-parallel-size 1 \
        --num-layers {} \
        --hidden-size {} \
@@ -52,7 +52,14 @@ CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
 
 
 def parse_args():
-    parser = argparse.ArgumentParser("Run single GPU benchmark")
+    parser = argparse.ArgumentParser("Run single GPU benchmark for GPT.")
+    parser.add_argument(
+        "-tp",
+        "--tensor-model-parallel-size",
+        type=int,
+        required=True,
+        help="Tensor model parallel size",
+    )
     parser.add_argument(
         "-s",
         "--seq-length",
@@ -96,9 +103,9 @@ def parse_args():
         help="Output directory for benchmark results",
     )
     parser.add_argument(
-        "--device",
-        type=int,
-        default=0,
+        "--devices",
+        type=str,
+        default="0",
         help="GPU to run benchmark on.",
     )
     # default model configuration corresponds to GPT-3 6.7B
@@ -124,15 +131,17 @@ def parse_args():
     )
 
     args = parser.parse_args()
+    args.devices = [int(d) for d in args.devices.split(",")]
     return args
 
 
 def run_benchmark(
+    tp_size,
     seqlen,
     microbatch_size,
     n_layers,
     output_dir,
-    device=0,
+    devices,
     benchmark_iters=50,
     hidden_size=4096,
     n_attn_heads=32,
@@ -142,10 +151,12 @@ def run_benchmark(
     use_flash_attn=False,
     log_file=None,
 ):
-    distributed_args = DISTRIBUTED_ARGS.format(MASTER_PORT + device)
+    assert len(devices) >= 1, "Must have at least one device"
+    distributed_args = DISTRIBUTED_ARGS.format(MASTER_PORT + devices[0])
     cmd = CMD_TEMPLATE.format(
-        device,
+        ",".join([str(d) for d in devices]),
         distributed_args,
+        tp_size,
         n_layers,
         hidden_size,
         n_attn_heads,
@@ -177,11 +188,12 @@ def run_benchmark(
 if __name__ == "__main__":
     args = parse_args()
     retval = run_benchmark(
+        args.tensor_model_parallel_size,
         args.seq_length,
         args.micro_batch_size,
         args.num_layers,
         args.output_dir,
-        args.device,
+        args.devices,
         args.benchmark_iters,
         args.hidden_size,
         args.num_attention_heads,

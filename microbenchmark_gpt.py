@@ -559,7 +559,8 @@ def get_optimizer_state_size(optimizer):
 
 def get_microbenchmark_name():
     args = get_args()
-    name = "hs{}_ah{}_kv{}_ffhs{}_sl{}_mbs{}".format(
+    name = "tp{}_hs{}_ah{}_kv{}_ffhs{}_sl{}_mbs{}".format(
+        args.tensor_model_parallel_size,
         args.hidden_size,
         args.num_attention_heads,
         args.kv_channels,
