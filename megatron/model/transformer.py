@@ -601,8 +601,8 @@ def get_bias_dropout_add(training):
     return _bias_dropout_add
 
 
-# @torch.jit.script
-@torch.compile(dynamic=True)
+# @torch.compile(dynamic=True)
+@torch.jit.script
 def bias_dropout_add_fused_train(x: torch.Tensor,
                                  bias: torch.Tensor,
                                  residual: torch.Tensor,
@@ -610,8 +610,8 @@ def bias_dropout_add_fused_train(x: torch.Tensor,
     return bias_dropout_add(x, bias, residual, prob, True)
 
 
-# @torch.jit.script
-@torch.compile(dynamic=True)
+# @torch.compile(dynamic=True)
+@torch.jit.script
 def bias_dropout_add_fused_inference(x: torch.Tensor,
                                      bias: torch.Tensor,
                                      residual: torch.Tensor,
