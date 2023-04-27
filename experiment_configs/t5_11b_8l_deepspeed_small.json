@@ -1,6 +1,0 @@
-{
-    "cluster_config": "./experiment_configs/cluster_configs/small.json",
-    "model_config": "./experiment_configs/model_configs/t5_11b_8l.json",
-    "data_config": "./experiment_configs/data_configs/cleaned_supervised_proportional.json",
-    "training_config": "./experiment_configs/training_configs/cSmall_mT511b8l_deepspeed.json"
-}

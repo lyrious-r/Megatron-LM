@@ -1,6 +1,9 @@
 import argparse
 import json
 import os
+import math
+import time
+import shutil
 import subprocess
 from string import Template
 from typing import Optional
@@ -11,6 +14,7 @@ DEEPSPEED_TEMPLATE_PATH = os.path.join(
     EXP_CONFIG_DIR, "deepspeed_config.template"
 )
 EXPERIMENT_DIR_PREFIX = "./experiments/"
+EXPERIMENT_PROGRESS_TIMEOUT = 60  # 60s
 
 
 def _postprocess_group_args(
@@ -293,7 +297,6 @@ def _add_plopt_args(parser):
         type=bool,
         help="Dump memory, ep, and execution logs to file.",
     )
-    # if plopt_config is not specified, require the following args
     group.add_argument(
         "--enable_plopt", type=bool, default=False, help="Enable PLOPT."
     )
@@ -311,7 +314,7 @@ def _add_plopt_args(parser):
     group.add_argument(
         "--plopt_device_memory_limit",
         type=int,
-        help="Memory limit per device in GB.",
+        help="Memory limit per device in MB.",
     )
     group.add_argument(
         "--plopt_intra_node_bw",
@@ -355,6 +358,29 @@ def _add_plopt_args(parser):
     return parser, group
 
 
+def _add_experiment_args(parser):
+    group = parser.add_argument_group(title="Experiment Config")
+    group.add_argument(
+        "--batch_experiments",
+        type=bool,
+        default=False,
+        help="Run experiment items in batch.",
+    )
+    group.add_argument(
+        "--sequence_length_range",
+        type=str,
+        default="512,1024,2048,4096,8192,16384,32768",
+        help="Sequence length range.",
+    )
+    group.add_argument(
+        "--global_batch_size_range",
+        type=str,
+        default="16384,32768,65536,131072",
+        help="Global batch size range.",
+    )
+    return parser, group
+
+
 def _check_logging_args(args):
     nranks = args.nnodes * args.gpus_per_node
     pp_times_tp = args.tensor_parallel_size * args.pipeline_parallel_size
@@ -379,8 +405,6 @@ def _check_logging_args(args):
             )
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
 
-    print("Experiment name:", args.experiment_name)
-    print("Experiment spec name:", exp_spec_name)
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
         args.experiment_name,
@@ -467,6 +491,175 @@ def _create_deepspeed_config(args, exp_logging_dir):
     return args
 
 
+def grid_search_parallelism(n_nodes, n_gpus_per_node):
+    """Grid search parallelism configurations.
+
+    Args:
+        n_nodes (int): Number of nodes.
+        n_gpus_per_node (int): Number of GPUs per node.
+
+    Returns:
+        list: List of parallelism configurations.
+    """
+    assert (n_gpus_per_node != 0) and (
+        n_gpus_per_node & (n_gpus_per_node - 1) == 0
+    ), "Number of GPUs per node must be a power of 2."
+    # only allow intra-node tp
+    for tp in [
+        2**i for i in range(math.floor(math.log2(n_gpus_per_node)) + 1)
+    ]:
+        gpus_per_tp_group = n_gpus_per_node * n_nodes // tp
+        for pp in [
+            2**i for i in range(math.floor(math.log2(gpus_per_tp_group)) + 1)
+        ]:
+            dp = gpus_per_tp_group // pp
+            assert (
+                dp * tp * pp == n_gpus_per_node * n_nodes
+            ), "Invalid parallelism configuration."
+            yield (dp, tp, pp)
+
+
+def grid_search_ds_stage(pp):
+    if pp > 1:
+        # we can only use zero 1 with pipeline parallelism
+        stage_candidates = [0, 1]
+    else:
+        # we can use zero 1, 2 with data and tensor parallelism
+        stage_candidates = [0, 1, 2]
+    for ds_stage in stage_candidates:
+        enable_ds = ds_stage > 0
+        yield (enable_ds, ds_stage)
+
+
+def get_pp_split_rank(pp_size):
+    return pp_size // 2
+
+
+def get_pp_device_to_node_str(nnodes, gpus_per_node):
+    mappings = []
+    for gpu_id in range(nnodes * gpus_per_node):
+        node_id = gpu_id // gpus_per_node
+        mappings.append("{}:{}".format(gpu_id, node_id))
+    return ",".join(mappings)
+
+
+def get_layer_to_device(args):
+    if args.pipeline_parallel_size == 1:
+        return "0"
+    pp_size = args.pipeline_parallel_size
+    if args.model_type == "t5":
+        # we use interleaved schedule for t5 to balance encoder and decoders
+        # for simplicity here we use a fixed virtual pipeline parallel size 2
+        assert (
+            args.encoder_num_layers % pp_size == 0
+        ), "Number of layers must be divisible by pipeline parallel size."
+        n_encoder_layers_per_device = args.encoder_num_layers // pp_size
+        n_decoder_layers_per_device = args.decoder_num_layers // pp_size
+        layer_to_device = []
+        for i in range(pp_size):
+            for _ in range(n_encoder_layers_per_device):
+                layer_to_device.append(f"{i}")
+        for i in range(pp_size):
+            for _ in range(n_decoder_layers_per_device):
+                layer_to_device.append(f"{i}")
+    else:
+        # we use sequential schedule for gpt
+        assert (
+            args.num_layers % pp_size == 0
+        ), "Number of layers must be divisible by pipeline parallel size."
+        n_layers_per_device = args.num_layers // pp_size
+        layer_to_device = []
+        for i in range(pp_size):
+            for _ in range(n_layers_per_device):
+                layer_to_device.append(f"{i}")
+    return ",".join(layer_to_device)
+
+
+def generate_dynapipe_exp_configs(args):
+    seqlens = [int(sl) for sl in args.sequence_length_range.split(",")]
+    gbs_tokens = [int(gbs) for gbs in args.global_batch_size_range.split(",")]
+    for seqlen in seqlens:
+        for gbs in gbs_tokens:
+            for dp, tp, pp in grid_search_parallelism(
+                args.nnodes, args.gpus_per_node
+            ):
+                for enable_ds, ds_stage in grid_search_ds_stage(pp):
+                    if args.model_type == "t5":
+                        # TODO: may run more experiments with decoder length
+                        # differenet from encoder length
+                        args.encoder_seq_length = seqlen
+                        args.decoder_seq_length = seqlen
+                    else:
+                        args.seq_length = seqlen
+                    args.tokens_per_global_batch = gbs
+                    args.tensor_parallel_size = tp
+                    args.pipeline_parallel_size = pp
+                    if pp > 1:
+                        args.pp_split_rank = get_pp_split_rank(pp)
+                    args.plopt_device_to_node = get_pp_device_to_node_str(
+                        args.nnodes, args.gpus_per_node
+                    )
+                    args.plopt_layer_to_device = get_layer_to_device(args)
+                    args.enable_deepspeed = enable_ds
+                    args.deepspeed_zero_stage = ds_stage
+                    yield args
+
+
+def run_batch_experiments(args):
+    for current_args in generate_dynapipe_exp_configs(args):
+        if args.enable_plopt:
+            initial_memlimit = current_args.plopt_device_memory_limit
+        while True:
+            current_args = _check_training_args(current_args)
+            current_args, exp_logging_dir = _check_logging_args(current_args)
+            current_args = _create_deepspeed_config(
+                current_args, exp_logging_dir
+            )
+            shell_script = _get_shell_script(current_args)
+            shell_script_path = os.path.join(exp_logging_dir, "run.sh")
+            with open(shell_script_path, "w") as f:
+                f.write(shell_script)
+            p = subprocess.Popen(f"bash {shell_script_path}", shell=True)
+            prev_nlines = 0
+            last_progress = time.time()
+            needs_restart = False
+            while p.poll() is None:
+                # check if the stdout/stderr log has progress
+                assert (
+                    current_args.stdout_stderr_log is not None
+                ), "stdout_stderr_log must be specified for batch experiments."
+                with open(current_args.stdout_stderr_log, "r") as f:
+                    nlines = len(f.readlines())
+                if nlines > prev_nlines:
+                    prev_nlines = nlines
+                    last_progress = time.time()
+                else:
+                    if (
+                        time.time() - last_progress
+                        > EXPERIMENT_PROGRESS_TIMEOUT
+                    ):
+                        # timeout, kill the job
+                        p.kill()
+                        os.system("pkill -f 'pretrain_t5'")
+                        os.system("pkill -f 'pretrain_gpt'")
+                        os.system("pkill -f 'redis-server'")
+                        time.sleep(5)
+                    if not args.enable_plopt:
+                        break
+                    else:
+                        # decrease memory limit and restart
+                        if current_args.plopt_device_memory_limit < 10000:
+                            break
+                        current_args.plopt_device_memory_limit -= 1000
+                        # nuke the result dir
+                        shutil.rmtree(exp_logging_dir)
+                        needs_restart = True
+                        break
+            if not needs_restart:
+                break
+        current_args.plopt_device_memory_limit = initial_memlimit
+
+
 def _parse_args():
     parser = argparse.ArgumentParser("Experiment runner for T5 and GPT.")
     parser.add_argument(
@@ -492,10 +685,12 @@ def _parse_args():
     parser, data_group = _add_data_args(parser)
     parser, training_group = _add_training_args(parser)
     parser, plopt_group = _add_plopt_args(parser)
+    parser, exp_group = _add_experiment_args(parser)
     args = parser.parse_args()
 
     # if experiment config exists, load it
     config_path = os.path.join(EXP_CONFIG_DIR, args.experiment_name + ".json")
+    print(f"Loading experiment config from {config_path}")
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
             config = json.load(f)
@@ -505,14 +700,16 @@ def _parse_args():
             ("data_config", str),
             ("training_config", str),
         ]
-        if args.enable_plopt:
-            required_args.append(("plopt_dump_stats", bool))
         for key, type_func in required_args:
             assert (
                 key in config
             ), f"Missing key {key} in experiment config file {config_path}"
             value = type_func(config[key])
             setattr(args, key, value)
+        # add other optional args
+        for key, value in config.items():
+            if key not in [k for k, _ in required_args]:
+                setattr(args, key, value)
 
     # load config files
     _postprocess_group_args(args, cluster_group, "cluster_config")
@@ -532,19 +729,50 @@ def _parse_args():
         "data_config",
         optional_args=["merge_file"] if args.model_type == "t5" else None,
     )
+    # if running experiment in batch, don't check training args that we
+    # are going to search through
+    training_optional_args = []
+    plopt_optional_args = []
+    if args.batch_experiments:
+        assert (
+            args.sequence_length_range is not None
+        ), "Must specify sequence length range when running experiments in batch."
+        assert (
+            args.global_batch_size_range is not None
+        ), "Must specify global batch size range when running experiments in batch."
+        training_optional_args += ["deepspeed_zero_stage"]
+        training_optional_args += [
+            "seq_length",
+            "encoder_seq_length",
+            "decoder_seq_length",
+        ]
+        training_optional_args += ["tokens_per_global_batch"]
+        print("Adding plopt_device_to_node to optional.")
+        plopt_optional_args += [
+            "plopt_device_to_node",
+            "plopt_layer_to_device",
+        ]
+    else:
+        training_optional_args = ["deepspeed_zero_stage"]
+        if args.model_type == "t5":
+            training_optional_args += ["seq_length"]
+        else:
+            training_optional_args += [
+                "encoder_seq_length",
+                "decoder_seq_length",
+            ]
     _postprocess_group_args(
         args,
         training_group,
         "training_config",
-        optional_args=["deepspeed_zero_stage"] + ["seq_length"]
-        if args.model_type == "t5"
-        else ["encoder_seq_length", "decoder_seq_length"],
+        optional_args=training_optional_args,
     )
     _postprocess_group_args(
         args,
         plopt_group,
         "training_config",
-        optional_args=[
+        optional_args=plopt_optional_args
+        + [
             "plopt_debug_logging_dir",
             "plopt_debug_dump_ep_prefix",
             "plopt_debug_dump_memory_prefix",
@@ -554,8 +782,13 @@ def _parse_args():
 
     # check args
     args = _check_cluster_args(args)
-    args = _check_training_args(args)
-    args, exp_logging_dir = _check_logging_args(args)
+
+    if args.batch_experiments:
+        # training and logging args are generated for each experiment
+        return args, None
+    else:
+        args = _check_training_args(args)
+        args, exp_logging_dir = _check_logging_args(args)
 
     return args, exp_logging_dir
 
@@ -569,6 +802,10 @@ def _get_shell_script(args):
     else:
         pipeline_args = ""
     # construct recompute args
+    if args.enable_plopt:
+        assert (
+            args.recompute_level == "none"
+        ), "Plopt uses dynamic recomputation, recompute_level is overriden."
     if args.recompute_level == "none":
         recompute_args = ""
     elif args.recompute_level == "selective":
@@ -634,14 +871,17 @@ def _get_shell_script(args):
 
 def main():
     args, exp_logging_dir = _parse_args()
-    args = _create_deepspeed_config(args, exp_logging_dir)
-    # get shell script
-    shell_script = _get_shell_script(args)
-    # run shell script
-    shell_script_path = os.path.join(exp_logging_dir, "run.sh")
-    with open(shell_script_path, "w") as f:
-        f.write(shell_script)
-    subprocess.run(f"bash {shell_script_path}", shell=True)
+    if args.batch_experiments:
+        run_batch_experiments(args)
+    else:
+        args = _create_deepspeed_config(args, exp_logging_dir)
+        # get shell script
+        shell_script = _get_shell_script(args)
+        # run shell script
+        shell_script_path = os.path.join(exp_logging_dir, "run.sh")
+        with open(shell_script_path, "w") as f:
+            f.write(shell_script)
+        subprocess.run(f"bash {shell_script_path}", shell=True)
 
 
 if __name__ == "__main__":

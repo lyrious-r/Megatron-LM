@@ -1,6 +1,0 @@
-{
-    "tensor_parallel_size": 1,
-    "pipeline_parallel_size": 1,
-    "enable_deepspeed": true,
-    "train_iters": 100
-}
