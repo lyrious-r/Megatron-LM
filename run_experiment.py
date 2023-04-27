@@ -15,6 +15,7 @@ DEEPSPEED_TEMPLATE_PATH = os.path.join(
 )
 EXPERIMENT_DIR_PREFIX = "./experiments/"
 EXPERIMENT_PROGRESS_TIMEOUT = 60  # 60s
+EXPERIMENT_PROGRESS_POLL_INTERVAL = 5  # 5s
 
 
 def _postprocess_group_args(
@@ -417,26 +418,22 @@ def _check_logging_args(args):
             args.plopt_debug_level = "DEBUG"
         else:
             args.plopt_debug_level = "INFO"
-        if args.plopt_debug_logging_dir is None:
-            args.plopt_debug_logging_dir = os.path.join(
-                exp_logging_dir, "plopt_logs"
-            )
-        if args.plopt_debug_dump_ep_prefix is None:
-            args.plopt_debug_dump_ep_prefix = os.path.join(
-                exp_logging_dir, "plopt_ep_stats"
-            )
-        if args.plopt_debug_dump_memory_prefix is None:
-            args.plopt_debug_dump_memory_prefix = os.path.join(
-                exp_logging_dir, "plopt_memory_stats"
-            )
+        args.plopt_debug_logging_dir = os.path.join(
+            exp_logging_dir, "plopt_logs"
+        )
+        args.plopt_debug_dump_ep_prefix = os.path.join(
+            exp_logging_dir, "plopt_ep_stats"
+        )
+        args.plopt_debug_dump_memory_prefix = os.path.join(
+            exp_logging_dir, "plopt_memory_stats"
+        )
     else:
         args.plopt_debug_logging_dir = "UNUSED"
         args.plopt_debug_dump_ep_prefix = "UNUSED"
         args.plopt_debug_dump_memory_prefix = "UNUSED"
-    if args.stdout_stderr_log is None:
-        args.stdout_stderr_log = os.path.join(
-            exp_logging_dir, "stdout_stderr.log"
-        )
+    args.stdout_stderr_log = os.path.join(
+        exp_logging_dir, "stdout_stderr.log"
+    )
     # dump all args to a file
     args_file = os.path.join(exp_logging_dir, "args.json")
     with open(args_file, "w") as f:
@@ -535,17 +532,28 @@ def get_pp_split_rank(pp_size):
     return pp_size // 2
 
 
-def get_pp_device_to_node_str(nnodes, gpus_per_node):
+def get_pp_device_to_node_str(args):
+    rank_separation = (
+        args.nnodes * args.gpus_per_node // args.pipeline_parallel_size
+    )
     mappings = []
-    for gpu_id in range(nnodes * gpus_per_node):
-        node_id = gpu_id // gpus_per_node
-        mappings.append("{}:{}".format(gpu_id, node_id))
+    for pp_rank_id in range(args.pipeline_parallel_size):
+        gpu_id = pp_rank_id * rank_separation
+        node_id = gpu_id // args.gpus_per_node
+        mappings.append("{}:{}".format(pp_rank_id, node_id))
     return ",".join(mappings)
 
 
 def get_layer_to_device(args):
     if args.pipeline_parallel_size == 1:
-        return "0"
+        return ",".join(
+            ["0"]
+            * (
+                args.encoder_num_layers + args.decoder_num_layers
+                if args.model_type == "t5"
+                else args.num_layers
+            )
+        )
     pp_size = args.pipeline_parallel_size
     if args.model_type == "t5":
         # we use interleaved schedule for t5 to balance encoder and decoders
@@ -596,14 +604,16 @@ def generate_dynapipe_exp_configs(args):
                     args.pipeline_parallel_size = pp
                     if pp > 1:
                         args.pp_split_rank = get_pp_split_rank(pp)
-                    args.plopt_device_to_node = get_pp_device_to_node_str(
-                        args.nnodes, args.gpus_per_node
-                    )
+                    args.plopt_device_to_node = get_pp_device_to_node_str(args)
                     args.plopt_layer_to_device = get_layer_to_device(args)
                     args.enable_deepspeed = enable_ds
                     args.deepspeed_zero_stage = ds_stage
                     yield args
 
+def cleanup_plopt_job():
+    os.system("pkill -f 'pretrain_t5'")
+    os.system("pkill -f 'pretrain_gpt'")
+    os.system("pkill -f 'redis-server'")
 
 def run_batch_experiments(args):
     for current_args in generate_dynapipe_exp_configs(args):
@@ -620,18 +630,27 @@ def run_batch_experiments(args):
             with open(shell_script_path, "w") as f:
                 f.write(shell_script)
             p = subprocess.Popen(f"bash {shell_script_path}", shell=True)
-            prev_nlines = 0
+
+            assert (
+                current_args.stdout_stderr_log is not None
+            ), "stdout_stderr_log must be specified for batch experiments."
+            prev_content = None
             last_progress = time.time()
             needs_restart = False
             while p.poll() is None:
                 # check if the stdout/stderr log has progress
-                assert (
-                    current_args.stdout_stderr_log is not None
-                ), "stdout_stderr_log must be specified for batch experiments."
+                if not os.path.exists(current_args.stdout_stderr_log):
+                    # the job has not started yet
+                    time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
+                    continue
                 with open(current_args.stdout_stderr_log, "r") as f:
-                    nlines = len(f.readlines())
-                if nlines > prev_nlines:
-                    prev_nlines = nlines
+                    current_content = f.read()
+                if "Failed to generate microbatches." in current_content:
+                    # error, kill the job without retry
+                    cleanup_plopt_job()
+                    break
+                if current_content != prev_content:
+                    prev_content = current_content
                     last_progress = time.time()
                 else:
                     if (
@@ -640,22 +659,24 @@ def run_batch_experiments(args):
                     ):
                         # timeout, kill the job
                         p.kill()
-                        os.system("pkill -f 'pretrain_t5'")
-                        os.system("pkill -f 'pretrain_gpt'")
-                        os.system("pkill -f 'redis-server'")
+                        cleanup_plopt_job()
                         time.sleep(5)
-                    if not args.enable_plopt:
-                        break
-                    else:
-                        # decrease memory limit and restart
-                        if current_args.plopt_device_memory_limit < 10000:
+                        if not args.enable_plopt:
                             break
-                        current_args.plopt_device_memory_limit -= 1000
-                        # nuke the result dir
-                        shutil.rmtree(exp_logging_dir)
-                        needs_restart = True
-                        break
+                        else:
+                            # decrease memory limit and restart
+                            if current_args.plopt_device_memory_limit < 10000:
+                                break
+                            current_args.plopt_device_memory_limit -= 1000
+                            # nuke the result dir
+                            shutil.rmtree(exp_logging_dir)
+                            needs_restart = True
+                            break
+                time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
+            cleanup_plopt_job()
+            time.sleep(1)
             if not needs_restart:
+                print("Proceed to next experiment.")
                 break
         current_args.plopt_device_memory_limit = initial_memlimit
 
@@ -747,7 +768,6 @@ def _parse_args():
             "decoder_seq_length",
         ]
         training_optional_args += ["tokens_per_global_batch"]
-        print("Adding plopt_device_to_node to optional.")
         plopt_optional_args += [
             "plopt_device_to_node",
             "plopt_layer_to_device",
