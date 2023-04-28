@@ -5,6 +5,7 @@ import math
 import time
 import shutil
 import subprocess
+from dataclasses import dataclass
 from string import Template
 from typing import Optional
 
@@ -252,6 +253,20 @@ def _add_training_args(parser):
     return parser, group
 
 
+def _get_expected_gbs(args):
+    # check micro_batch_size and global_batch_size
+    if args.model_type == "t5":
+        effective_tokens_per_sequence = (
+            args.encoder_seq_length + args.decoder_seq_length
+        )
+    else:
+        effective_tokens_per_sequence = args.seq_length
+    expected_global_batch_size = (
+        args.tokens_per_global_batch // effective_tokens_per_sequence
+    )
+    return expected_global_batch_size
+
+
 def _check_training_args(args):
     if args.enable_plopt:
         # reset recompute level
@@ -275,15 +290,7 @@ def _check_training_args(args):
         args.micro_batch_size = 1
     else:
         # check micro_batch_size and global_batch_size
-        if args.model_type == "t5":
-            effective_tokens_per_sequence = (
-                args.encoder_seq_length + args.decoder_seq_length
-            )
-        else:
-            effective_tokens_per_sequence = args.seq_length
-        expected_global_batch_size = (
-            args.tokens_per_global_batch // effective_tokens_per_sequence
-        )
+        expected_global_batch_size = _get_expected_gbs(args)
         if args.global_batch_size != expected_global_batch_size:
             print("Override global batch size to", expected_global_batch_size)
             args.global_batch_size = expected_global_batch_size
@@ -399,11 +406,11 @@ def _check_logging_args(args):
             args.decoder_seq_length,
             args.tokens_per_global_batch,
         )
+    if not args.enable_plopt:
+        exp_spec_name += "_mbs{}_rc{}".format(
+            args.micro_batch_size, args.recompute_level
+        )
     if args.enable_deepspeed:
-        if not args.enable_plopt:
-            exp_spec_name += "_mbs{}_rc{}".format(
-                args.micro_batch_size, args.recompute_level
-            )
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
 
     exp_logging_dir = os.path.join(
@@ -434,9 +441,7 @@ def _check_logging_args(args):
         args.plopt_debug_logging_dir = "UNUSED"
         args.plopt_debug_dump_ep_prefix = "UNUSED"
         args.plopt_debug_dump_memory_prefix = "UNUSED"
-    args.stdout_stderr_log = os.path.join(
-        exp_logging_dir, "stdout_stderr.log"
-    )
+    args.stdout_stderr_log = os.path.join(exp_logging_dir, "stdout_stderr.log")
     # dump all args to a file
     args_file = os.path.join(exp_logging_dir, "args.json")
     with open(args_file, "w") as f:
@@ -491,6 +496,18 @@ def _create_deepspeed_config(args, exp_logging_dir):
     return args
 
 
+def _get_pow_of_2s_up_to(n):
+    """Get powers of 2 up to n.
+
+    Args:
+        n (int): Upper bound.
+
+    Returns:
+        list: List of powers of 2.
+    """
+    return [2**i for i in range(math.floor(math.log2(n)) + 1)]
+
+
 def grid_search_parallelism(n_nodes, n_gpus_per_node):
     """Grid search parallelism configurations.
 
@@ -505,13 +522,9 @@ def grid_search_parallelism(n_nodes, n_gpus_per_node):
         n_gpus_per_node & (n_gpus_per_node - 1) == 0
     ), "Number of GPUs per node must be a power of 2."
     # only allow intra-node tp
-    for tp in [
-        2**i for i in range(math.floor(math.log2(n_gpus_per_node)) + 1)
-    ]:
+    for tp in _get_pow_of_2s_up_to(n_gpus_per_node):
         gpus_per_tp_group = n_gpus_per_node * n_nodes // tp
-        for pp in [
-            2**i for i in range(math.floor(math.log2(gpus_per_tp_group)) + 1)
-        ]:
+        for pp in _get_pow_of_2s_up_to(gpus_per_tp_group):
             dp = gpus_per_tp_group // pp
             assert (
                 dp * tp * pp == n_gpus_per_node * n_nodes
@@ -533,6 +546,28 @@ def grid_search_ds_stage(args):
     for ds_stage in stage_candidates:
         enable_ds = ds_stage > 0
         yield (enable_ds, ds_stage)
+
+
+def grid_search_microbatch_size(dp_size, args):
+    # this should be run after setting sequence length and global batch size
+    if args.enable_plopt:
+        # plopt use dynamic micro batch size
+        yield 1
+        return
+    expected_gbs = _get_expected_gbs(args)
+    per_gpu_batch_size = expected_gbs // dp_size
+    for mbs in reversed(_get_pow_of_2s_up_to(per_gpu_batch_size)):
+        if expected_gbs % mbs == 0:
+            yield mbs
+
+
+def grid_search_recomputation(args):
+    if args.enable_plopt:
+        # plopt use dynamic recomputation
+        yield "none"
+        return
+    for recompute_level in ["none", "selective", "full"]:
+        yield recompute_level
 
 
 def get_pp_split_rank(pp_size):
@@ -590,45 +625,218 @@ def get_layer_to_device(args):
     return ",".join(layer_to_device)
 
 
+RC_MAP = {
+    "none": 0,
+    "selective": 1,
+    "full": 2,
+}
+
+
+@dataclass(eq=True)
+class ExperimentConfig:
+    enc_seqlen: int = 0
+    dec_seqlen: int = 0
+    gbs: int = 0
+    dp_size: int = 1
+    tp_size: int = 1
+    pp_size: int = 1
+    mbs: int = 1
+    rc: str = "none"
+    ds_level: int = 0
+    status: str = "unknown"
+
+    def speed_dominates(self, other):
+        assert isinstance(
+            other, ExperimentConfig
+        ), "Can only compare with ExperimentConfig"
+        # Config A speed_dominates config B if A is almost surely faster than B
+        # if sequence length, gbs or parallelism are different, no dominance
+        if (
+            self.enc_seqlen != other.enc_seqlen
+            or self.dec_seqlen != other.dec_seqlen
+            or self.gbs != other.gbs
+            or self.dp_size != other.dp_size
+            or self.tp_size != other.tp_size
+            or self.pp_size != other.pp_size
+        ):
+            return False
+        # dominance happens if ds_level is lower, and mbs is higher,
+        # and rc level is lower
+        if (
+            self.ds_level <= other.ds_level
+            and self.mbs >= other.mbs
+            and RC_MAP[self.rc] <= RC_MAP[other.rc]
+        ):
+            return True
+        return False
+
+    def memory_dominates(self, other):
+        assert isinstance(
+            other, ExperimentConfig
+        ), "Can only compare with ExperimentConfig"
+        # Config A memory_dominates config B if A is almost surely
+        # consumes more memory than B
+        # if gbs or parallelism are different, no dominance
+        if (
+            self.gbs != other.gbs
+            or self.dp_size != other.dp_size
+            or self.tp_size != other.tp_size
+            or self.pp_size != other.pp_size
+        ):
+            return False
+        # dominance happens if sequence length is higher, mbs is higher,
+        # rc level is lower, and ds_level is lower
+        if (
+            self.enc_seqlen >= other.enc_seqlen
+            and self.dec_seqlen >= other.dec_seqlen
+            and self.mbs >= other.mbs
+            and RC_MAP[self.rc] <= RC_MAP[other.rc]
+            and self.ds_level <= other.ds_level
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def parse_experiment_status(exp_dir):
+        log_path = os.path.join(exp_dir, "stdout_stderr.log")
+        if not os.path.exists(log_path):
+            return "unknown"
+        with open(log_path, "r") as f:
+            contents = f.read()
+        if "[after training is done]" in contents:
+            return "success"
+        else:
+            return "failure"
+
+    @staticmethod
+    def parse_history_experiments(exp_dir):
+        exp_spec = os.path.basename(os.path.normpath(exp_dir))
+        config_items = exp_spec.split("_")
+        config = ExperimentConfig()
+        for item in config_items:
+            if item.startswith("dp"):
+                config.dp_size = int(item[2:])
+            elif item.startswith("tp"):
+                config.tp_size = int(item[2:])
+            elif item.startswith("pp"):
+                config.pp_size = int(item[2:])
+            elif item.startswith("sl"):
+                config.enc_seqlen = int(item[2:])
+            elif item.startswith("encsl"):
+                config.enc_seqlen = int(item[5:])
+            elif item.startswith("decsl"):
+                config.dec_seqlen = int(item[5:])
+            elif item.startswith("gbs"):
+                config.gbs = int(item[3:])
+            elif item.startswith("mbs"):
+                config.mbs = int(item[3:])
+            elif item.startswith("rc"):
+                config.rc = item[2:]
+            elif item.startswith("zero"):
+                config.ds_level = int(item[4:])
+        # test status
+        config.status = ExperimentConfig.parse_experiment_status(exp_dir)
+        return config
+
+
 def generate_dynapipe_exp_configs(args):
     seqlens = [int(sl) for sl in args.sequence_length_range.split(",")]
     gbs_tokens = [int(gbs) for gbs in args.global_batch_size_range.split(",")]
+    ####  Sequence length  ####
     for seqlen in seqlens:
+        if args.model_type == "t5":
+            # TODO: may run more experiments with decoder length
+            # differenet from encoder length
+            args.encoder_seq_length = seqlen
+            args.decoder_seq_length = seqlen
+        else:
+            args.seq_length = seqlen
+        ####  global batch size  ####
         for gbs in gbs_tokens:
+            args.tokens_per_global_batch = gbs
+            ####  Parallelism  ####
             for dp, tp, pp in grid_search_parallelism(
                 args.nnodes, args.gpus_per_node
             ):
-                for enable_ds, ds_stage in grid_search_ds_stage(args):
-                    if args.model_type == "t5":
-                        # TODO: may run more experiments with decoder length
-                        # differenet from encoder length
-                        args.encoder_seq_length = seqlen
-                        args.decoder_seq_length = seqlen
-                    else:
-                        args.seq_length = seqlen
-                    args.tokens_per_global_batch = gbs
-                    args.tensor_parallel_size = tp
-                    args.pipeline_parallel_size = pp
-                    if pp > 1:
-                        args.pp_split_rank = get_pp_split_rank(pp)
-                    args.plopt_device_to_node = get_pp_device_to_node_str(args)
-                    args.plopt_layer_to_device = get_layer_to_device(args)
-                    args.enable_deepspeed = enable_ds
-                    args.deepspeed_zero_stage = ds_stage
-                    yield args
+                args.tensor_parallel_size = tp
+                args.pipeline_parallel_size = pp
+                if pp > 1:
+                    args.pp_split_rank = get_pp_split_rank(pp)
+                args.plopt_device_to_node = get_pp_device_to_node_str(args)
+                args.plopt_layer_to_device = get_layer_to_device(args)
+                ####  Micro batch size  ####
+                for mbs in grid_search_microbatch_size(dp, args):
+                    args.micro_batch_size = mbs
+                    ###  Recomputation  ####
+                    for recompute_level in grid_search_recomputation(args):
+                        args.recompute_level = recompute_level
+                        ####  ZeRO Stage  ####
+                        for enable_ds, ds_stage in grid_search_ds_stage(args):
+                            args.enable_deepspeed = enable_ds
+                            args.deepspeed_zero_stage = ds_stage
+                            # config
+                            config = ExperimentConfig()
+                            if args.model_type == "t5":
+                                config.enc_seqlen = args.encoder_seq_length
+                                config.dec_seqlen = args.decoder_seq_length
+                            else:
+                                config.enc_seqlen = args.seq_length
+                            config.gbs = args.tokens_per_global_batch
+                            config.dp_size = dp
+                            config.tp_size = tp
+                            config.pp_size = pp
+                            config.mbs = mbs
+                            config.rc = args.recompute_level
+                            config.ds_level = args.deepspeed_zero_stage
+                            yield args, config
+
 
 def cleanup_plopt_job():
     os.system("pkill -f 'pretrain_t5'")
     os.system("pkill -f 'pretrain_gpt'")
     os.system("pkill -f 'redis-server'")
 
+
 def run_batch_experiments(args):
-    for current_args in generate_dynapipe_exp_configs(args):
+    past_success_configs = []
+    past_failures_configs = []
+    exp_dir = os.path.join(EXPERIMENT_DIR_PREFIX, args.experiment_name)
+    if os.path.isdir(exp_dir):
+        for exp_spec_dir in [
+            x for x in os.listdir(exp_dir) if os.path.isdir(x)
+        ]:
+            full_exp_spec_dir = os.path.join(exp_dir, exp_spec_dir)
+            config = ExperimentConfig.parse_history_experiments(
+                full_exp_spec_dir
+            )
+            if config.status == "success":
+                past_success_configs.append(config)
+            else:
+                past_failures_configs.append(config)
+    for current_args, current_exp_config in generate_dynapipe_exp_configs(
+        args
+    ):
+        for past_success_config in past_success_configs:
+            past_success_config: ExperimentConfig
+            if past_success_config.speed_dominates(current_exp_config):
+                print(
+                    f"Skip {current_exp_config} because it is slower than {past_success_config}"
+                )
+                continue
+        for past_failure_config in past_failures_configs:
+            past_failure_config: ExperimentConfig
+            if current_exp_config.memory_dominates(past_failure_config):
+                print(
+                    f"Skip {current_exp_config} because it consumes more memory than {past_failure_config}"
+                )
+                continue
         if args.enable_plopt:
             initial_memlimit = current_args.plopt_device_memory_limit
         while True:
             current_args = _check_training_args(current_args)
-            current_args, exp_logging_dir, should_skip = _check_logging_args(current_args)
+            current_args, exp_logging_dir, should_skip = _check_logging_args(
+                current_args
+            )
             if should_skip:
                 # the experiment has been run
                 break
@@ -688,7 +896,20 @@ def run_batch_experiments(args):
             if not needs_restart:
                 print("Proceed to next experiment.")
                 break
-        current_args.plopt_device_memory_limit = initial_memlimit
+        # check current experiment status
+        current_exp_config.status = ExperimentConfig.parse_experiment_status(
+            exp_logging_dir
+        )
+        if current_exp_config.status == "success":
+            past_success_configs.append(current_exp_config)
+        elif current_exp_config.status == "failure":
+            past_failures_configs.append(current_exp_config)
+        else:
+            raise ValueError(
+                f"Failed to parse experiment status: {exp_logging_dir}"
+            )
+        if args.enable_plopt:
+            current_args.plopt_device_memory_limit = initial_memlimit
 
 
 def _parse_args():
@@ -847,8 +1068,9 @@ def _get_shell_script(args):
             "--recompute-granularity full --recompute-method uniform"
         )
     else:
-        assert args.recompute_level == "none", \
-            f"Invalid recompute level {args.recompute_level}"
+        assert (
+            args.recompute_level == "none"
+        ), f"Invalid recompute level {args.recompute_level}"
     # construct dynamic batch args
     if args.enable_plopt:
         batching_args = (
