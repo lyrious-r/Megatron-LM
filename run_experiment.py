@@ -411,6 +411,9 @@ def _check_logging_args(args):
         args.experiment_name,
         exp_spec_name,
     )
+    if os.path.exists(exp_logging_dir):
+        # exp dir already exists
+        return args, exp_logging_dir, True
     if not os.path.exists(exp_logging_dir):
         os.makedirs(exp_logging_dir)
     if args.enable_plopt:
@@ -438,7 +441,7 @@ def _check_logging_args(args):
     args_file = os.path.join(exp_logging_dir, "args.json")
     with open(args_file, "w") as f:
         json.dump(vars(args), f, indent=2)
-    return args, exp_logging_dir
+    return args, exp_logging_dir, False
 
 
 def _create_deepspeed_config(args, exp_logging_dir):
@@ -464,7 +467,7 @@ def _create_deepspeed_config(args, exp_logging_dir):
                 "ZeRO2 and ZeRO3 are not supported with pipeline parallelism."
             )
         # disable overlap comm if using pipeline parallelism
-        if args.pipeline_parallel_size > 1:
+        if args.pipeline_parallel_size > 1 or args.enable_plopt:
             overlap_comm = "false"
         else:
             overlap_comm = "true"
@@ -516,9 +519,13 @@ def grid_search_parallelism(n_nodes, n_gpus_per_node):
             yield (dp, tp, pp)
 
 
-def grid_search_ds_stage(pp):
-    if pp > 1:
-        # we can only use zero 1 with pipeline parallelism
+def grid_search_ds_stage(args):
+    if args.model_type == "t5" and args.pipeline_parallel_size > 1:
+        # since we use interleaved schedule for t5, we cannot use DS
+        yield (False, 0)
+        return
+    if args.pipeline_parallel_size > 1 or args.enable_plopt:
+        # we can only use zero 1 with pipeline parallelism or with plopt
         stage_candidates = [0, 1]
     else:
         # we can use zero 1, 2 with data and tensor parallelism
@@ -591,7 +598,7 @@ def generate_dynapipe_exp_configs(args):
             for dp, tp, pp in grid_search_parallelism(
                 args.nnodes, args.gpus_per_node
             ):
-                for enable_ds, ds_stage in grid_search_ds_stage(pp):
+                for enable_ds, ds_stage in grid_search_ds_stage(args):
                     if args.model_type == "t5":
                         # TODO: may run more experiments with decoder length
                         # differenet from encoder length
@@ -621,7 +628,10 @@ def run_batch_experiments(args):
             initial_memlimit = current_args.plopt_device_memory_limit
         while True:
             current_args = _check_training_args(current_args)
-            current_args, exp_logging_dir = _check_logging_args(current_args)
+            current_args, exp_logging_dir, should_skip = _check_logging_args(current_args)
+            if should_skip:
+                # the experiment has been run
+                break
             current_args = _create_deepspeed_config(
                 current_args, exp_logging_dir
             )
@@ -805,12 +815,12 @@ def _parse_args():
 
     if args.batch_experiments:
         # training and logging args are generated for each experiment
-        return args, None
+        return args, None, False
     else:
         args = _check_training_args(args)
-        args, exp_logging_dir = _check_logging_args(args)
+        args, exp_logging_dir, should_skip = _check_logging_args(args)
 
-    return args, exp_logging_dir
+    return args, exp_logging_dir, should_skip
 
 
 def _get_shell_script(args):
@@ -822,20 +832,23 @@ def _get_shell_script(args):
     else:
         pipeline_args = ""
     # construct recompute args
+    recompute_args = ""
     if args.enable_plopt:
         assert (
             args.recompute_level == "none"
         ), "Plopt uses dynamic recomputation, recompute_level is overriden."
-    if args.recompute_level == "none":
-        recompute_args = ""
-    elif args.recompute_level == "selective":
+        # although recompute_level is none, we still need to set recompute
+        # method, which is required if full recompute is chosen
+        recompute_args = "--recompute-method uniform"
+    if args.recompute_level == "selective":
         recompute_args = "--recompute-activations"
     elif args.recompute_level == "full":
         recompute_args = (
             "--recompute-granularity full --recompute-method uniform"
         )
     else:
-        raise ValueError(f"Invalid recompute level {args.recompute_level}")
+        assert args.recompute_level == "none", \
+            f"Invalid recompute level {args.recompute_level}"
     # construct dynamic batch args
     if args.enable_plopt:
         batching_args = (
@@ -890,7 +903,10 @@ def _get_shell_script(args):
 
 
 def main():
-    args, exp_logging_dir = _parse_args()
+    args, exp_logging_dir, should_skip = _parse_args()
+    if should_skip:
+        print("Experiment directory already exists, skipping.")
+        return
     if args.batch_experiments:
         run_batch_experiments(args)
     else:

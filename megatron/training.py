@@ -450,8 +450,10 @@ def setup_model_and_optimizer(model_provider_func,
             mpu=mpu,
             dist_init_required=False
         )
-        if mpu.get_pipeline_model_parallel_world_size() > 1:
+        if args.use_plopt or mpu.get_pipeline_model_parallel_world_size() > 1:
+            # we manually allreduce gradients when using plopt or during pp
             model.pipeline_parallelism = True
+            model.enable_backward_allreduce = False
         model = [model]
 
 
@@ -749,7 +751,8 @@ def plopt_train_step(data_iterator, forward_step_func,
             skipped_iter = 1
     else:
         model[0].set_gradient_accumulation_boundary(True)
-        model[0].allreduce_gradients()
+        if not model[0].enable_backward_allreduce:
+            model[0].allreduce_gradients()
         model[0].step()
         skipped_iter = 0
         grad_norm = 0

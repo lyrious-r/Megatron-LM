@@ -194,14 +194,14 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
         # the order of output_tensors follows Megatron-LM
         if isinstance(outputs, list):
             exec.output_tensors[key] = list(zip(outputs, [True, False] if len(outputs) == 2 else [True]))
+            if len(outputs) == 2:
+                # decoder stage, first output is decoder output, second is
+                # encoder activation. We need to swap them to match plopt's
+                # order
+                new_outputs = [outputs[1], outputs[0]]
+                outputs = new_outputs
         else:
             exec.output_tensors[key] = [(outputs, True)]
-        if len(outputs) == 2:
-            # decoder stage, first output is decoder output, second is
-            # encoder activation. We need to swap them to match plopt's
-            # order
-            new_outputs = [outputs[1], outputs[0]]
-            outputs = new_outputs
 
         if not isinstance(outputs, list):
             outputs = [outputs]

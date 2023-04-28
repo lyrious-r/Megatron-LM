@@ -216,14 +216,18 @@ def backward_step(optimizer, input_tensor, output_tensor,
         # last stage, output_tensor is loss
         if args.deepspeed:
             assert ds_model is not None
-            # use deepspeed backward
-            ds_model.backward(output_tensor[0])
+            if not ds_model.pipeline_parallelism and ds_model.enable_backward_allreduce:
+                # use deepspeed backward
+                ds_model.backward(output_tensor[0])
+            else:
+                # manually scale loss and use custom backward
+                output_tensor = [optimizer.loss_scaler.loss_scale * output_tensor[0]]
+                custom_backward(output_tensor[0], output_tensor_grad[0])
         else:
             output_tensor = optimizer.scale_loss(output_tensor[0])
             custom_backward(output_tensor[0], output_tensor_grad[0])
     else:
         custom_backward(output_tensor[0], output_tensor_grad[0])
-
     # Collect the grad of the input_tensor.
     input_tensor_grad = [None]
     if input_tensor is not None:
