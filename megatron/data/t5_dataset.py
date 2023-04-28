@@ -420,10 +420,12 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
         current_micro_batch = []
         assert len(batch) % micro_batch_size == 0, "batch size must be divisible by micro batch size"
         for sequence in batch:
+            enc_key = "text" if self.inputs_only else "text_enc"
+            seqlen_offset = 1 if self.inputs_only else 0
             padded_sequence = build_supervised_training_sample(
-                sequence["text_enc"],
+                sequence[enc_key],
                 sequence["text_dec"] if not self.inputs_only else None,
-                args.encoder_seq_length,
+                args.encoder_seq_length + seqlen_offset,
                 args.decoder_seq_length if not self.inputs_only else 0,
                 self.pad_id,
                 self.bos_id,
