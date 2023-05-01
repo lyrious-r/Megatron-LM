@@ -556,6 +556,9 @@ def grid_search_microbatch_size(dp_size, args):
         return
     expected_gbs = _get_expected_gbs(args)
     per_gpu_batch_size = expected_gbs // dp_size
+    if per_gpu_batch_size == 0:
+        # cannot run
+        return
     for mbs in reversed(_get_pow_of_2s_up_to(per_gpu_batch_size)):
         if expected_gbs % mbs == 0:
             yield mbs
@@ -816,20 +819,27 @@ def run_batch_experiments(args):
     for current_args, current_exp_config in generate_dynapipe_exp_configs(
         args
     ):
+        should_skip = False
         for past_success_config in past_success_configs:
             past_success_config: ExperimentConfig
             if past_success_config.speed_dominates(current_exp_config):
                 print(
                     f"Skip {current_exp_config} because it is slower than {past_success_config}"
                 )
-                continue
+                should_skip = True
+                break
+        if should_skip:
+            continue
         for past_failure_config in past_failures_configs:
             past_failure_config: ExperimentConfig
             if current_exp_config.memory_dominates(past_failure_config):
                 print(
                     f"Skip {current_exp_config} because it consumes more memory than {past_failure_config}"
                 )
-                continue
+                should_skip = True
+                break
+        if should_skip:
+            continue
         if args.enable_plopt:
             initial_memlimit = current_args.plopt_device_memory_limit
         while True:
