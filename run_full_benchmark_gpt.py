@@ -128,17 +128,26 @@ if __name__ == "__main__":
             list(range(tp_size * i, tp_size * (i + 1)))
             for i in range(n_gpus // tp_size)
         ]
-        per_device_group_mbs = len(candidate_mbs) // len(device_groups)
-        last_group_remainder = len(candidate_mbs) % len(device_groups)
-        mbs_args = [
-            candidate_mbs[
-                i * per_device_group_mbs : (i + 1) * per_device_group_mbs
-            ]
-            for i in range(len(device_groups))
-        ]
-        if last_group_remainder > 0:
-            mbs_args[-1] += candidate_mbs[-last_group_remainder:]
-        assert sum([len(mbs) for mbs in mbs_args]) == len(candidate_mbs)
+        per_device_group_mbs = (len(candidate_mbs) + len(device_groups) - 1) // len(device_groups)
+        print(per_device_group_mbs)
+        # round robin assignment
+        mbs_args = []
+        all_mbs_args = []
+        for i in range(len(device_groups)):
+            current_group_mbs = []
+            for n in range(per_device_group_mbs):
+                if n % 2 == 0:
+                    mbs_id = i + n * len(device_groups)
+                else:
+                    mbs_id = (len(device_groups) - i - 1) + n * len(device_groups)
+                if mbs_id >= len(candidate_mbs):
+                    continue
+                current_group_mbs.append(
+                    candidate_mbs[mbs_id]
+                )
+            mbs_args.append(current_group_mbs)
+            all_mbs_args += current_group_mbs
+        assert sorted(all_mbs_args) == sorted(candidate_mbs)
         for device_group_id, devices in enumerate(device_groups):
             p = mp.Process(
                 target=_profile_func,
