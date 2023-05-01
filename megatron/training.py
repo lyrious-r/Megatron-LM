@@ -1166,7 +1166,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
     report_memory_flag = True
-    rank = mpu.get_pipeline_model_parallel_rank()
+    rank = torch.distributed.get_rank()
     while iteration < args.train_iters:
         if rank == 0:
             logger.info("Running iteration {}...".format(iteration))
