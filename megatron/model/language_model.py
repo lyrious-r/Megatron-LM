@@ -453,6 +453,9 @@ class TransformerLanguageModel(MegatronModule):
 
         if "encoder" in self.hooks:
             self.hooks["encoder"]()
+        if not self.add_decoder and "postprocess_grad" in self.hooks:
+            # we register postprocess backward hook here
+            encoder_output.register_hook(self.hooks["postprocess_grad"])
         # since the decoder takes both encoder_output and decoder_input
         # as input, we register a hook on both tensors and only trigger
         # on the last

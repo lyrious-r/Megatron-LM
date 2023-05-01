@@ -257,6 +257,7 @@ def model_provider(pre_process=True, post_process=True):
         hooks = {
             "embedding": get_fw_hook("embedding", "encoder"),
             "encoder": get_fw_hook("encoder", "postprocess"),
+            "postprocess_grad": get_grad_hook("postprocess", "encoder"),
             "encoder_grad": get_grad_hook("encoder", "embedding"),
         },
     )
@@ -381,8 +382,8 @@ def benchmark_forward_backward_no_pipelining(
     stop_timer(timers, "forward_total")
     if not forward_only:
         start_timer(timers, "backward_total")
-        start_timer(timers, "backward_encoder")
-        torch.cuda.nvtx.range_push("backward_encoder")
+        start_timer(timers, "backward_postprocess")
+        torch.cuda.nvtx.range_push("backward_postprocess")
         if iteration == TRACE_AT_ITER:
             torch.cuda.memory._record_memory_history(True,
                 trace_alloc_max_entries=100000,
@@ -656,7 +657,9 @@ def generate_report(n_iters, save_path=None):
     _get_time_and_print("forward_total")
     _get_time_and_print("forward_embedding")
     _get_time_and_print("forward_encoder", multiplier=1 / args.num_layers)
+    _get_time_and_print("forward_postprocess")
     _get_time_and_print("backward_total")
+    _get_time_and_print("backward_postprocess")
     _get_time_and_print("backward_encoder", multiplier=1 / args.num_layers)
     _get_time_and_print("backward_embedding")
     if f is not None:
