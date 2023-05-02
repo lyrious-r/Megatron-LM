@@ -1,9 +1,0 @@
-{
-    "tensor_parallel_size": 1,
-    "pipeline_parallel_size": 1,
-    "micro_batch_size": 2,
-    "recompute_level": "full",
-    "enable_deepspeed": true,
-    "deepspeed_zero_stage": 2,
-    "train_iters": 100
-}

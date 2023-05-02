@@ -1,0 +1,7 @@
+{
+    "cluster_config": "./experiment_configs/cluster_configs/mid.json",
+    "model_config": "./experiment_configs/model_configs/t5_11b_24l.json",
+    "data_config": "./experiment_configs/data_configs/flan_zsopt_t5.json",
+    "training_config": "./experiment_configs/training_configs/t511b_plopt.json",
+    "plopt_dump_stats": true
+}
