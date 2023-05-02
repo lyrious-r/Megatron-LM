@@ -663,6 +663,7 @@ def plopt_train_step(data_iterator, forward_step_func,
                 microbatch_iterator.append(iter(mb))
             else:
                 microbatch_iterator.append(None)
+                ep = None
             # execution plan should be the same for all iterators
             if execution_plan is None:
                 execution_plan = ep

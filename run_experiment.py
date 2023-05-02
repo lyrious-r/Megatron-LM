@@ -883,9 +883,10 @@ def run_batch_experiments(args):
                 else:
                     if (
                         time.time() - last_progress
-                        > EXPERIMENT_PROGRESS_TIMEOUT
+                        > EXPERIMENT_PROGRESS_TIMEOUT or 
+                        "OutOfMemoryError" in current_content
                     ):
-                        # timeout, kill the job
+                        # kill the job
                         p.kill()
                         cleanup_plopt_job()
                         time.sleep(5)
