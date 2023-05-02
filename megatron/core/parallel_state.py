@@ -102,8 +102,9 @@ def initialize_model_parallel(
     num_pipeline_model_parallel_groups: int = world_size // pipeline_model_parallel_size
     num_data_parallel_groups: int = world_size // data_parallel_size
 
+    args = get_args()
     if virtual_pipeline_model_parallel_size is not None:
-        if not pipeline_model_parallel_size > 2:
+        if not pipeline_model_parallel_size > 2 and not args.use_plopt:
             raise RuntimeError("pipeline-model-parallel size should be greater than 2 with "
                                "interleaved schedule")
         global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
@@ -209,7 +210,6 @@ def initialize_model_parallel(
     _set_global_memory_buffer()
 
     # hijack the plopt logger
-    args = get_args()
     if args.use_plopt:
         import plopt
         logger = plopt.utils.logger.create_logger("Megatron", distributed_rank=get_pipeline_model_parallel_rank())

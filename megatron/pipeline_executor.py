@@ -244,11 +244,7 @@ def _create_backward_handler(optimizer, model=None):
         output_tensor_grad = [exec.buffer_slots[buffer_id] for buffer_id in buffer_ids if exec.buffer_slots[buffer_id] is not None]
         # on first backward stage, output_tensor_grad should be None
         if instr.stage == exec.execution_plan.nstages // 2:
-            if args.virtual_pipeline_model_parallel_size is None:
-                # no virtual pipeline
-                output_tensor_grad = [None, None]
-            else:
-                output_tensor_grad = [None]
+            output_tensor_grad = [None, None]
         # same here, if there are two output tensor grads, we need to swap them
         # to match Megatron-LM's order (decoder output, encoder activation)
         if len(output_tensor_grad) == 2:

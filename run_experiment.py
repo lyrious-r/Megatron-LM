@@ -15,7 +15,7 @@ DEEPSPEED_TEMPLATE_PATH = os.path.join(
     EXP_CONFIG_DIR, "deepspeed_config.template"
 )
 EXPERIMENT_DIR_PREFIX = "./experiments/"
-EXPERIMENT_PROGRESS_TIMEOUT = 60  # 60s
+EXPERIMENT_PROGRESS_TIMEOUT = 180  # 3 mins
 EXPERIMENT_PROGRESS_POLL_INTERVAL = 5  # 5s
 
 
@@ -1056,9 +1056,19 @@ def _parse_args():
 
 def _get_shell_script(args):
     # construct pipeline_args
-    if args.model_type == "t5":
+    if args.model_type == "t5" and args.pipeline_parallel_size > 1:
         pipeline_args = (
             f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
+        )
+        # interleaved schedule
+        n_encoder_layers_per_device = args.encoder_num_layers // args.pipeline_parallel_size
+        n_decoder_layers_per_device = args.decoder_num_layers // args.pipeline_parallel_size
+        assert n_encoder_layers_per_device == n_decoder_layers_per_device, (
+            "Different number of layers per device for encoder and decoder "
+            "is not supported."
+        )
+        pipeline_args += (
+            f" --num-layers-per-virtual-pipeline-stage {n_encoder_layers_per_device}"
         )
     else:
         pipeline_args = ""
