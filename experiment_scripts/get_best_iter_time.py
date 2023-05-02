@@ -153,7 +153,8 @@ def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file):
                 exp_config = ExperimentConfig.parse_history_experiments(os.path.join(args.dir, matched_dir))
                 best_config = exp_config
     if best_config is None:
-        print("No successful experiment found for", enc_seqlen, dec_seqlen, gbs)
+        print("No successful experiment found for enc seqlen {}, dec seqlen {}, gbs {}".format(enc_seqlen, dec_seqlen, gbs))
+        return
     log_json = {
         "Encoder SeqLen": enc_seqlen,
         "Decoder SeqLen": dec_seqlen,
