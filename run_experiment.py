@@ -885,7 +885,8 @@ def run_batch_experiments(args):
                     continue
                 with open(current_args.stdout_stderr_log, "r") as f:
                     current_content = f.read()
-                if "Failed to generate microbatches." in current_content:
+                if ("Failed to generate microbatches." in current_content or 
+                    "No feasible schedule" in current_content):
                     # error, kill the job without retry
                     cleanup_plopt_job()
                     break
