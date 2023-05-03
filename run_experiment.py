@@ -363,6 +363,12 @@ def _add_plopt_args(parser):
         type=str,
         help="Directory to dump memory stats.",
     )
+    group.add_argument(
+        "--plopt_enable_packing",
+        type=bool,
+        default=False,
+        help="Enable packing.",
+    )
     return parser, group
 
 
@@ -412,7 +418,8 @@ def _check_logging_args(args):
         )
     if args.enable_deepspeed:
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
-
+    if args.enable_plopt and args.plopt_enable_packing:
+        exp_spec_name += "_spp" # for seqlen preserving packing
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
         args.experiment_name,
@@ -646,6 +653,7 @@ class ExperimentConfig:
     mbs: int = 1
     rc: str = "none"
     ds_level: int = 0
+    spp: bool = False
     status: str = "unknown"
 
     def speed_dominates(self, other):
@@ -661,6 +669,7 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
+            or self.spp != other.spp
         ):
             return False
         # dominance happens if ds_level is lower, and mbs is higher,
@@ -685,6 +694,7 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
+            or self.spp != other.spp
         ):
             return False
         # dominance happens if sequence length is higher, mbs is higher,
@@ -737,6 +747,8 @@ class ExperimentConfig:
                 config.rc = item[2:]
             elif item.startswith("zero"):
                 config.ds_level = int(item[4:])
+            elif item.startswith("spp"):
+                config.spp = True
         # test status
         config.status = ExperimentConfig.parse_experiment_status(exp_dir)
         return config
@@ -995,7 +1007,7 @@ def _parse_args():
     # if running experiment in batch, don't check training args that we
     # are going to search through
     training_optional_args = []
-    plopt_optional_args = []
+    plopt_optional_args = ["plopt_enable_packing"]
     if args.batch_experiments:
         assert (
             args.sequence_length_range is not None
@@ -1120,6 +1132,8 @@ def _get_shell_script(args):
         ]
         if args.model_type == "gpt":
             plopt_args.append("--plopt-seqlen-offset 1")
+        if args.plopt_enable_packing:
+            plopt_args.append("--plopt-enable-packing")
         plopt_args = " ".join(plopt_args)
     # construct deepspeed args
     if not args.enable_deepspeed:

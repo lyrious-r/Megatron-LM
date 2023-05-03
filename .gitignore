@@ -31,3 +31,4 @@ _memory_viz.py
 /_*.ipynb
 /experiments/*
 microbenchmark_*.log
+/*.jsonl

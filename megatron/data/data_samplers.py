@@ -101,6 +101,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             round_seqlen_multiple=args.plopt_round_seqlen_multiple,
             seqlen_offset=args.plopt_seqlen_offset,
             limit_rc_type=args.plopt_limit_rc_type,
+            model_type="gpt" if dataset.inputs_only else "t5",
         )
         node_rank = torch.distributed.get_rank() // int(os.environ["LOCAL_WORLD_SIZE"])
         node_size = torch.distributed.get_world_size() // int(os.environ["LOCAL_WORLD_SIZE"])
