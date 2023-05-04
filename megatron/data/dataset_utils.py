@@ -841,7 +841,7 @@ def get_samples_mapping_supervised(
 
     # Build the indexed mapping if not exist.
     if (not os.path.isfile(input_indexmap_filename)) or (not os.path.isfile(target_indexmap_filename)):
-        should_build = offline_build or torch.distributed.get_rank() == 0
+        should_build = offline_build or int(os.environ['LOCAL_RANK']) == 0
         print_fn = print if offline_build else print_rank_0
         if should_build:
             print_fn(' > WARNING: could not find index map file {} and {}, building '
