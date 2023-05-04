@@ -521,28 +521,31 @@ def _get_pow_of_2s_up_to(n):
         return [1, 8, 16]
     elif n == 32:
         return [1, 16, 32]
+    elif n == 64:
+        return [1, 16, 32, 64]
+    elif n == 128:
+        return [1, 32, 64, 128]
+    elif n == 256:
+        return [1, 64, 128, 256]
+    else:
+        raise ValueError(f"Invalid n: {n}")
 
 
-def grid_search_parallelism(n_nodes, n_gpus_per_node):
-    """Grid search parallelism configurations.
-
-    Args:
-        n_nodes (int): Number of nodes.
-        n_gpus_per_node (int): Number of GPUs per node.
-
-    Returns:
-        list: List of parallelism configurations.
-    """
-    assert (n_gpus_per_node != 0) and (
-        n_gpus_per_node & (n_gpus_per_node - 1) == 0
+def grid_search_parallelism(args):
+    assert (args.gpus_per_node != 0) and (
+        args.gpus_per_node & (args.gpus_per_node - 1) == 0
     ), "Number of GPUs per node must be a power of 2."
     # only allow intra-node tp
-    for tp in _get_pow_of_2s_up_to(n_gpus_per_node):
-        gpus_per_tp_group = n_gpus_per_node * n_nodes // tp
+    for tp in _get_pow_of_2s_up_to(args.gpus_per_node):
+        gpus_per_tp_group = args.gpus_per_node * args.nnodes // tp
         for pp in _get_pow_of_2s_up_to(gpus_per_tp_group):
+            if args.num_layers and args.num_layers % pp != 0:
+                continue
+            if args.encoder_num_layers and args.encoder_num_layers % pp != 0:
+                continue
             dp = gpus_per_tp_group // pp
             assert (
-                dp * tp * pp == n_gpus_per_node * n_nodes
+                dp * tp * pp == args.gpus_per_node * args.nnodes
             ), "Invalid parallelism configuration."
             yield (dp, tp, pp)
 
@@ -778,9 +781,7 @@ def generate_dynapipe_exp_configs(args):
         for gbs in gbs_tokens:
             args.tokens_per_global_batch = gbs
             ####  Parallelism  ####
-            for dp, tp, pp in grid_search_parallelism(
-                args.nnodes, args.gpus_per_node
-            ):
+            for dp, tp, pp in grid_search_parallelism(args):
                 args.tensor_parallel_size = tp
                 args.pipeline_parallel_size = pp
                 if pp > 1:
