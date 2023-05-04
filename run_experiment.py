@@ -816,9 +816,9 @@ def generate_dynapipe_exp_configs(args):
 
 
 def cleanup_plopt_job():
-    os.system("pkill -f 'pretrain_t5'")
-    os.system("pkill -f 'pretrain_gpt'")
-    os.system("pkill -f 'redis-server'")
+    os.system("pkill -9 -f 'pretrain_t5'")
+    os.system("pkill -9 -f 'pretrain_gpt'")
+    os.system("pkill -9 -f 'redis-server'")
 
 
 def run_batch_experiments(args):
