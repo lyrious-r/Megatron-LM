@@ -1,0 +1,7 @@
+{
+    "num_layers": 40,
+    "hidden_size": 5140,
+    "num_attn_heads": 40,
+    "kv_channels": 128,
+    "ffn_hidden_size": 20560
+}
