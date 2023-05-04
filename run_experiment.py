@@ -512,7 +512,15 @@ def _get_pow_of_2s_up_to(n):
     Returns:
         list: List of powers of 2.
     """
-    return [2**i for i in range(math.floor(math.log2(n)) + 1)]
+    # to reduce the number of configs, we manually specify candidates
+    if n <= 4:
+        return [2**i for i in range(math.floor(math.log2(n)) + 1)]
+    elif n == 8:
+        return [1, 4, 8]
+    elif n == 16:
+        return [1, 8, 16]
+    elif n == 32:
+        return [1, 16, 32]
 
 
 def grid_search_parallelism(n_nodes, n_gpus_per_node):
