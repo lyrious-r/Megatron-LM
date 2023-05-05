@@ -1172,7 +1172,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     report_memory_flag = True
     rank = torch.distributed.get_rank()
     while iteration < args.train_iters:
-        if rank == 0:
+        if int(os.environ.get('LOCAL_RANK')) == 0:
             logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()
         update_num_microbatches(args.consumed_train_samples)

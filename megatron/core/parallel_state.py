@@ -212,7 +212,7 @@ def initialize_model_parallel(
     # hijack the plopt logger
     if args.use_plopt:
         import plopt
-        logger = plopt.utils.logger.create_logger("Megatron", distributed_rank=get_pipeline_model_parallel_rank())
+        logger = plopt.utils.logger.create_logger("Megatron", distributed_rank=torch.distributed.get_rank())
         plopt.utils.logger.logger = logger
 
 
