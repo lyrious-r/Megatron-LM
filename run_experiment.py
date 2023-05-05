@@ -98,15 +98,15 @@ class RedisKVStore(object):
             time.sleep(KVREDIS_POLLING_INTERVAL)
 
     def barrier(self):
+        if self.check_abort_signal():
+            raise RuntimeError("Abort signal received")
         key = "barrier_{}".format(self.barrier_cnt)
         self.client.incr(key)
         while True:
-            count = self.client.get(key)
+            count = int(self.client.get(key).decode())
             if count == self.n_processes:
                 break
             time.sleep(KVREDIS_POLLING_INTERVAL)
-        if self.node_rank == 0:
-            self.client.delete(key)
         self.barrier_cnt += 1
 
     def blocking_get(self, key):
@@ -128,6 +128,8 @@ class RedisKVStore(object):
         return self.client.delete(key)
 
     def gather(self, obj):
+        if self.check_abort_signal():
+            raise RuntimeError("Abort signal received")
         # synchronous gather
         ack_key = "gather_ack"
         if self.node_rank == 0:
@@ -1115,6 +1117,9 @@ def run_batch_experiments(args):
                         p.kill()
                     cleanup_plopt_job(args)
                     break
+                # check if the entire script needs to abort
+                if kv.check_abort_signal():
+                    sys.exit(1)
                 time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
             kv.barrier()
             # check restart status again incase some nodes exit early
