@@ -840,10 +840,10 @@ def get_samples_mapping_supervised(
     target_indexmap_filename += '.npy'
 
     # Build the indexed mapping if not exist.
-    if (not os.path.isfile(input_indexmap_filename)) or (not os.path.isfile(target_indexmap_filename)):
-        should_build = offline_build or int(os.environ['LOCAL_RANK']) == 0
-        print_fn = print if offline_build else print_rank_0
-        if should_build:
+    if int(os.environ['LOCAL_RANK']) == 0:
+        # only check on rank 0
+        if (not os.path.isfile(input_indexmap_filename)) or (not os.path.isfile(target_indexmap_filename)):
+            print_fn = print
             print_fn(' > WARNING: could not find index map file {} and {}, building '
                 'the indices on rank 0 ...'.format(input_indexmap_filename, target_indexmap_filename))
 
