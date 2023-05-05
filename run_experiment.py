@@ -1001,12 +1001,9 @@ def run_batch_experiments(args):
             else:
                 past_failures_configs.append(config)
     config_iterator = generate_dynapipe_exp_configs(args)
-    if args.node_rank == 0:
-        from tqdm import tqdm
-        config_iterator = tqdm(config_iterator)
-        print_fn = config_iterator.write
-    else:
-        print_fn = print
+    from tqdm import tqdm
+    config_iterator = tqdm(config_iterator)
+    print_fn = config_iterator.write
     for current_args, current_exp_config in config_iterator:
         should_skip = False
         for past_success_config in past_success_configs:
@@ -1107,8 +1104,10 @@ def run_batch_experiments(args):
                         if args.enable_plopt:
                             should_restart = True
                 if should_abort and should_restart:
+                    print_fn("Setting status to restart for spec {}.".format(spec_basename))
                     kv.set(spec_basename + "status", "restart")
                 elif should_abort:
+                    print_fn("Setting status to abort for spec {}.".format(spec_basename))
                     kv.set(spec_basename + "status", "abort")
                 # get the most updated status from all nodes
                 current_status = kv.get(spec_basename + "status")
@@ -1117,6 +1116,7 @@ def run_batch_experiments(args):
                 should_abort = current_status in ["abort", "restart"]
                 should_restart = current_status == "restart"
                 if should_abort:
+                    print_fn("Abort running spec {}.".format(spec_basename))
                     # kill the job on all nodes
                     if p.poll() is None:
                         p.kill()
