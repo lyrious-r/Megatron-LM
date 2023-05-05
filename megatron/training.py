@@ -1060,7 +1060,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             #     pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
             # if not args.plopt_custom_allocator:
             #     torch._C._cuda_attach_out_of_memory_observer(oom_observer)
-        if rank == 0:
+        if int(os.environ['LOCAL_RANK']) == 0:
             logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()
         update_num_microbatches(args.consumed_train_samples)

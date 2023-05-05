@@ -1006,7 +1006,7 @@ def run_batch_experiments(args):
         config_iterator = tqdm(config_iterator)
         print_fn = config_iterator.write
     else:
-        print_fn = lambda *args, **kwargs: None
+        print_fn = print
     for current_args, current_exp_config in config_iterator:
         should_skip = False
         for past_success_config in past_success_configs:
@@ -1102,6 +1102,7 @@ def run_batch_experiments(args):
                         > EXPERIMENT_PROGRESS_TIMEOUT
                     ):
                         # timeout
+                        print_fn("Timeout running spec {}.".format(spec_basename))
                         should_abort = True
                         if args.enable_plopt:
                             should_restart = True
@@ -1139,8 +1140,10 @@ def run_batch_experiments(args):
                 if current_args.plopt_device_memory_limit < 10000:
                     break
                 current_args.plopt_device_memory_limit -= 1000
+                print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
                 # nuke the result dir
                 shutil.rmtree(exp_logging_dir)
+                kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
                     kv.set(spec_basename + "status", "running")
