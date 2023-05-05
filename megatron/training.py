@@ -561,6 +561,9 @@ def train_step(forward_step_func, data_iterator,
         else:
             skipped_iter = 1
     else:
+        model[0].set_gradient_accumulation_boundary(True)
+        if not model[0].enable_backward_allreduce:
+            model[0].allreduce_gradients()
         model[0].step()
         skipped_iter = 0
         grad_norm = 0

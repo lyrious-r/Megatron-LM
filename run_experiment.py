@@ -721,7 +721,7 @@ def grid_search_microbatch_size(dp_size, args):
     if per_gpu_batch_size == 0:
         # cannot run
         return
-    for mbs in reversed(_get_pow_of_2s_up_to(per_gpu_batch_size)):
+    for mbs in [x for x in reversed(_get_pow_of_2s_up_to(per_gpu_batch_size)) if x < 128]:
         if expected_gbs % mbs == 0:
             yield mbs
 
@@ -1150,6 +1150,19 @@ def run_batch_experiments(args):
         current_exp_config.status = ExperimentConfig.parse_experiment_status(
             exp_logging_dir
         )
+        # exchange exp status
+        gathered_exp_status = kv.gather(current_exp_config.status)
+        if kv.node_rank == 0:
+            # check if all nodes have the same exp config
+            if not all(
+                [
+                    status == current_exp_config.status
+                    for status in gathered_exp_status
+                ]
+            ):
+                print("ERROR: All nodes must have the same experiment status, but got {}".format(gathered_exp_status))
+                kv.send_abort_signal()
+                sys.exit(1)
         if current_exp_config.status == "success":
             past_success_configs.append(current_exp_config)
         elif current_exp_config.status == "failure":
