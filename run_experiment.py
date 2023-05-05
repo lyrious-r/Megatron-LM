@@ -647,7 +647,7 @@ def _create_deepspeed_config(args, exp_logging_dir):
     return args
 
 
-def _get_pow_of_2s_up_to(n):
+def _get_pow_of_2s_up_to(n, reduced_number=False):
     """Get powers of 2 up to n.
 
     Args:
@@ -657,7 +657,7 @@ def _get_pow_of_2s_up_to(n):
         list: List of powers of 2.
     """
     # to reduce the number of configs, we manually specify candidates
-    if n <= 4:
+    if n <= 4 or not reduced_number:
         return [2**i for i in range(math.floor(math.log2(n)) + 1)]
     elif n == 8:
         return [1, 4, 8]
@@ -680,9 +680,9 @@ def grid_search_parallelism(args):
         args.gpus_per_node & (args.gpus_per_node - 1) == 0
     ), "Number of GPUs per node must be a power of 2."
     # only allow intra-node tp
-    for tp in _get_pow_of_2s_up_to(args.gpus_per_node):
+    for tp in _get_pow_of_2s_up_to(args.gpus_per_node, reduced_number=True):
         gpus_per_tp_group = args.gpus_per_node * args.nnodes // tp
-        for pp in _get_pow_of_2s_up_to(gpus_per_tp_group):
+        for pp in _get_pow_of_2s_up_to(gpus_per_tp_group, reduced_number=True):
             if args.num_layers and args.num_layers % pp != 0:
                 continue
             if args.encoder_num_layers and args.encoder_num_layers % pp != 0:
