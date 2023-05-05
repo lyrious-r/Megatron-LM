@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 import math
 import time
 import shutil
@@ -8,6 +9,9 @@ import subprocess
 from dataclasses import dataclass
 from string import Template
 from typing import Optional
+import pickle
+import datetime
+import redis
 
 EXP_CONFIG_DIR = "./experiment_configs"
 TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_{}.template")
@@ -18,7 +22,141 @@ EXPERIMENT_DIR_PREFIX = "./experiments/"
 EXPERIMENT_PROGRESS_TIMEOUT = 180  # 3 mins
 EXPERIMENT_PROGRESS_POLL_INTERVAL = 5  # 5s
 
+EXP_REDIS_PORT = 9876
+KVREDIS_INIT_POLLING_INTERVAL = 0.5
+KVREDIS_CONNECT_TIMEOUT = 30
+KVREDIS_POLLING_INTERVAL = 0.5
+
 print_fn = print
+
+class RedisKVStore(object):
+    # a blocking local redis client
+    def __init__(self, args):
+        self.node_rank = args.node_rank
+        self.is_master = args.node_rank == 0
+        self.host = args.master_addr
+        self.port = EXP_REDIS_PORT
+        self.n_processes = args.nnodes
+        self.barrier_cnt = 0
+        if self.is_master:
+            self.server = self._run_redis_server()
+        # wait for redis server to start
+        t = time.time()
+        while True:
+            try:
+                self.client = redis.Redis(host=self.host, port=self.port, db=0)
+                self.client.ping()
+                break
+            except redis.exceptions.ConnectionError:
+                time.sleep(KVREDIS_INIT_POLLING_INTERVAL)
+                if time.time() - t > KVREDIS_CONNECT_TIMEOUT:
+                    raise RuntimeError(
+                        "WARNING: Cannot connect to KV Server. "
+                        "Is PLOPT_KV_HOST and PLOPT_KV_PORT set correctly?"
+                    )
+                continue
+
+    def __del__(self):
+        if self.is_master:
+            if self.server.poll() is not None:
+                return
+            self.server.send_signal(subprocess.signal.SIGINT)
+            self.server.wait()
+
+    def _run_redis_server(self):
+        # run a redis server
+        p = subprocess.Popen(
+            [
+                "redis-server",
+                "--save",
+                "",
+                "--port",
+                str(self.port),
+                "--bind",
+                str(self.host),
+            ],
+            shell=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+        return p
+
+    def wait(self, keys, timeout=None):
+        # wait for a key to be set
+        time_start = datetime.datetime.now()
+        if not isinstance(keys, (list, tuple)):
+            keys = [keys]
+        while True:
+            if self.client.exists(*keys):
+                break
+            if (
+                timeout is not None
+                and datetime.datetime.now() - time_start > timeout
+            ):
+                # match torch kvstore behavior
+                raise RuntimeError("Timeout")
+            time.sleep(KVREDIS_POLLING_INTERVAL)
+
+    def barrier(self):
+        key = "barrier_{}".format(self.barrier_cnt)
+        self.client.incr(key)
+        while True:
+            count = self.client.get(key)
+            if count == self.n_processes:
+                break
+            time.sleep(KVREDIS_POLLING_INTERVAL)
+        if self.node_rank == 0:
+            self.client.delete(key)
+        self.barrier_cnt += 1
+
+    def blocking_get(self, key):
+        self.wait(key)
+        return self.client.get(key)
+
+    def set(self, key, value):
+        # match torch kvstore behavior
+        self.client.set(key, value)
+
+    def get(self, key):
+        return self.client.get(key)
+
+    def add(self, key, value: int):
+        # match torch kvstore behavior
+        return self.client.incr(key, value)
+
+    def delete_key(self, key):
+        return self.client.delete(key)
+
+    def gather(self, obj):
+        # synchronous gather
+        ack_key = "gather_ack"
+        if self.node_rank == 0:
+            recved_objs = [obj]
+            # read from all keys
+            for i in range(1, self.n_processes):
+                key = "gather_r{}".format(i)
+                self.wait(key)
+                recved_objs.append(pickle.loads(self.client.get(key)))
+                self.delete_key(key)
+            # set ack key
+            self.set(ack_key, "1")
+            return recved_objs
+        else:
+            # delete ack key
+            self.delete_key(ack_key)
+            key = "gather_r{}".format(self.node_rank)
+            self.client.set(key, pickle.dumps(obj))
+            # wait for ack key before returning
+            self.wait(ack_key)
+        return
+
+    def send_abort_signal(self):
+        self.client.set("abort", 1)
+
+    def check_abort_signal(self):
+        if self.client.get("abort") == 1:
+            return True
+        return False
 
 def _postprocess_group_args(
     args: argparse.Namespace,
@@ -454,7 +592,7 @@ def _check_logging_args(args):
     args_file = os.path.join(exp_logging_dir, "args.json")
     with open(args_file, "w") as f:
         args_dict = vars(args)
-        dump_dict = {k: v for k, v in args_dict.items() if k != "mpi_conn"}
+        dump_dict = {k: v for k, v in args_dict.items() if k != "kvstore"}
         json.dump(dump_dict, f, indent=2)
     return args, exp_logging_dir, False
 
@@ -818,10 +956,26 @@ def generate_dynapipe_exp_configs(args):
                             yield args, config
 
 
-def cleanup_plopt_job():
+def pgrep():
+    out = os.popen("pgrep redis").read().strip()
+    return list(map(int, out.splitlines()))
+
+def kill_non_controller_redis_servers(args):
+    if args.node_rank != 0:
+        os.system("pkill -9 -f 'redis-server'")
+    else:
+        kv: RedisKVStore = args.kvstore
+        server_pid = kv.server.pid if kv.server else None
+        redis_pids = list(map(int, os.popen("pgrep redis").read().strip().splitlines()))
+        for pid in redis_pids:
+            if pid != server_pid:
+                os.system(f"kill -9 {pid}")
+
+
+def cleanup_plopt_job(args):
     os.system("pkill -9 -f 'pretrain_t5'")
     os.system("pkill -9 -f 'pretrain_gpt'")
-    os.system("pkill -9 -f 'redis-server'")
+    kill_non_controller_redis_servers(args)
 
 
 def run_batch_experiments(args):
@@ -877,20 +1031,19 @@ def run_batch_experiments(args):
             current_args, exp_logging_dir, should_skip = _check_logging_args(
                 current_args
             )
+            spec_basename = os.path.basename(exp_logging_dir)
             if args.node_rank == 0:
-                spec_basename = os.path.basename(exp_logging_dir)
                 config_iterator.set_description("Running experiment {}".format(spec_basename))
             if should_skip:
                 # the experiment has been run
                 break
             # barrier before starting the experiment
-            assert hasattr(args, "mpi_conn") and args.mpi_conn is not None
-            args.mpi_conn.Barrier()
+            assert hasattr(args, "kvstore") and args.kvstore is not None
+            kv: RedisKVStore = args.kvstore
+            kv.barrier()
             # exchange exp config
-            gathered_exp_configs = args.mpi_conn.gather(
-                current_exp_config, root=0
-            )
-            if args.mpi_conn.rank == 0:
+            gathered_exp_configs = kv.gather(current_exp_config)
+            if kv.node_rank == 0:
                 # check if all nodes have the same exp config
                 if not all(
                     [
@@ -899,8 +1052,9 @@ def run_batch_experiments(args):
                     ]
                 ):
                     print("ERROR: All nodes must have the same experiment config.")
-                    args.mpi_conn.Abort(1)
-            args.mpi_conn.Barrier()
+                    kv.send_abort_signal()
+                    sys.exit(1)
+            kv.barrier()
             current_args = _create_deepspeed_config(
                 current_args, exp_logging_dir
             )
@@ -947,36 +1101,26 @@ def run_batch_experiments(args):
                         should_abort = True
                         if args.enable_plopt:
                             should_restart = True
-                should_abort_all_nodes = args.mpi_conn.allgather(
-                    should_abort
-                )
-                should_restart_all_nodes = args.mpi_conn.allgather(
-                    should_restart
-                )
-                args.mpi_conn.allgather(
-                    False
-                )
-                if any(should_abort_all_nodes):
+                if should_abort and should_restart:
+                    kv.set(spec_basename + "status", "restart")
+                elif should_abort:
+                    kv.set(spec_basename + "status", "abort")
+                # get the most updated status from all nodes
+                current_status = kv.get(spec_basename + "status")
+                should_abort = current_status in ["abort", "restart"]
+                should_restart = current_status == "restart"
+                if should_abort:
                     # kill the job on all nodes
                     if p.poll() is None:
                         p.kill()
-                    cleanup_plopt_job()
-                    if any(should_restart_all_nodes):
-                        should_restart = True
+                    cleanup_plopt_job(args)
                     break
                 time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
-            cleanup_plopt_job()
-            # continue mpi heartbeat since different node may exit at
-            # differnt time
-            while True:
-                # should abort
-                args.mpi_conn.allgather(False)
-                # should restart
-                args.mpi_conn.allgather(should_restart)
-                if all(args.mpi_conn.allgather(True)):
-                    # all nodes have exited
-                    break
-                time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
+            kv.barrier()
+            # check restart status again incase some nodes exit early
+            current_status = kv.get(spec_basename + "status")
+            should_restart = current_status == "restart"
+            cleanup_plopt_job(args)
             if not should_restart:
                 break
             else:
@@ -1003,7 +1147,7 @@ def run_batch_experiments(args):
             current_args.plopt_device_memory_limit = initial_memlimit
 
 
-def _parse_args(mpi_conn):
+def _parse_args():
     parser = argparse.ArgumentParser("Experiment runner for T5 and GPT.")
     parser.add_argument(
         "--experiment_name",
@@ -1122,19 +1266,9 @@ def _parse_args(mpi_conn):
         switch_arg="enable_plopt",
     )
 
-    # use mpi to broadcast host ip
-    args.mpi_conn = mpi_conn
-    args.node_rank = mpi_conn.Get_rank()
-    if args.node_rank == 0:
-        # broadcast master_addr
-        if args.master_addr == "localhost" and args.nnodes > 1:
-            # abort if master_addr is not specified
-            print("ERROR: master_addr must be specified for node 0.")
-            args.mpi_conn.Abort()
-        args.mpi_conn.bcast(args.master_addr, root=0)
-    else:
-        args.master_addr = args.mpi_conn.bcast(None, root=0)
-    args.plopt_kv_host = args.master_addr
+    # init kvstore for exp control
+    kvstore = RedisKVStore(args)
+    args.kvstore = kvstore
 
     # check args
     args = _check_cluster_args(args)
@@ -1242,9 +1376,7 @@ def _get_shell_script(args):
 
 
 def main():
-    from mpi4py import MPI
-    mpi_conn = MPI.COMM_WORLD
-    args, exp_logging_dir, should_skip = _parse_args(mpi_conn)
+    args, exp_logging_dir, should_skip = _parse_args()
     if should_skip:
         print_fn("Experiment directory already exists, skipping.")
         return
@@ -1259,6 +1391,11 @@ def main():
         with open(shell_script_path, "w") as f:
             f.write(shell_script)
         subprocess.run(f"bash {shell_script_path}", shell=True)
+    args.kvstore.barrier()
+    if args.kvstore.is_master:
+        if args.kvstore.server.poll() is not None:
+            return
+        os.system("pkill -f 'redis-server'")
 
 
 if __name__ == "__main__":
