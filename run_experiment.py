@@ -18,6 +18,7 @@ EXPERIMENT_DIR_PREFIX = "./experiments/"
 EXPERIMENT_PROGRESS_TIMEOUT = 180  # 3 mins
 EXPERIMENT_PROGRESS_POLL_INTERVAL = 5  # 5s
 
+print_fn = print
 
 def _postprocess_group_args(
     args: argparse.Namespace,
@@ -292,7 +293,7 @@ def _check_training_args(args):
         # check micro_batch_size and global_batch_size
         expected_global_batch_size = _get_expected_gbs(args)
         if args.global_batch_size != expected_global_batch_size:
-            print("Override global batch size to", expected_global_batch_size)
+            print_fn("Override global batch size to {}".format(expected_global_batch_size))
             args.global_batch_size = expected_global_batch_size
     return args
 
@@ -837,14 +838,21 @@ def run_batch_experiments(args):
                 past_success_configs.append(config)
             else:
                 past_failures_configs.append(config)
-    for current_args, current_exp_config in generate_dynapipe_exp_configs(
+    config_iterator = generate_dynapipe_exp_configs(args)
+    if args.node_rank == 0:
+        from tqdm import tqdm
+        config_iterator = tqdm(config_iterator)
+        print_fn = tqdm.write
+    else:
+        print_fn = lambda *args, **kwargs: None
+    for current_args, current_exp_config in config_iterator(
         args
     ):
         should_skip = False
         for past_success_config in past_success_configs:
             past_success_config: ExperimentConfig
             if past_success_config.speed_dominates(current_exp_config):
-                print(
+                print_fn(
                     f"Skip {current_exp_config} because it is slower than {past_success_config}"
                 )
                 should_skip = True
@@ -854,7 +862,7 @@ def run_batch_experiments(args):
         for past_failure_config in past_failures_configs:
             past_failure_config: ExperimentConfig
             if current_exp_config.memory_dominates(past_failure_config):
-                print(
+                print_fn(
                     f"Skip {current_exp_config} because it consumes more memory than {past_failure_config}"
                 )
                 should_skip = True
@@ -868,9 +876,33 @@ def run_batch_experiments(args):
             current_args, exp_logging_dir, should_skip = _check_logging_args(
                 current_args
             )
+            if args.node_rank == 0:
+                spec_basename = os.path.basename(exp_logging_dir)
+                config_iterator.set_description("Running experiment {}".format(spec_basename))
             if should_skip:
                 # the experiment has been run
                 break
+            # barrier before starting the experiment
+            assert hasattr(args, "mpi_conn") and args.mpi_conn is not None
+            args.mpi_conn.Barrier()
+            # exchange exp config
+            gathered_exp_configs = args.mpi_conn.gather(
+                current_exp_config, root=0
+            )
+            if args.mpi_conn.rank == 0:
+                # check if all nodes have the same exp config
+                assert all(
+                    [
+                        gathered_exp_config == current_exp_config
+                        for gathered_exp_config in gathered_exp_configs
+                    ]
+                )
+            else:
+                args.mpi_conn.Abort(1)
+                raise RuntimeError(
+                    "All nodes must have the same experiment config."
+                )
+            args.mpi_conn.Barrier()
             current_args = _create_deepspeed_config(
                 current_args, exp_logging_dir
             )
@@ -878,57 +910,86 @@ def run_batch_experiments(args):
             shell_script_path = os.path.join(exp_logging_dir, "run.sh")
             with open(shell_script_path, "w") as f:
                 f.write(shell_script)
-            p = subprocess.Popen(f"bash {shell_script_path}", shell=True)
+            # all stdout and stderr are redirected to current_args.stdout_stderr_log
+            p = subprocess.Popen(f"bash {shell_script_path}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             assert (
                 current_args.stdout_stderr_log is not None
             ), "stdout_stderr_log must be specified for batch experiments."
             prev_content = None
             last_progress = time.time()
-            needs_restart = False
+            should_restart = False
             while p.poll() is None:
                 # check if the stdout/stderr log has progress
                 if not os.path.exists(current_args.stdout_stderr_log):
                     # the job has not started yet
                     time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
                     continue
+                should_abort = False
                 with open(current_args.stdout_stderr_log, "r") as f:
                     current_content = f.read()
                 if ("Failed to generate microbatches." in current_content or 
-                    "No feasible schedule" in current_content):
-                    # error, kill the job without retry
-                    cleanup_plopt_job()
-                    break
-                if current_content != prev_content:
+                    "No feasible schedule" in current_content or 
+                    "OutOfMemoryError" in current_content):
+                    # error
+                    should_abort = True
+                    if args.enable_plopt:
+                        should_restart = True
+                elif current_content != prev_content:
+                    # progress
                     prev_content = current_content
                     last_progress = time.time()
                 else:
+                    # no progress
                     if (
                         time.time() - last_progress
-                        > EXPERIMENT_PROGRESS_TIMEOUT or 
-                        "OutOfMemoryError" in current_content
+                        > EXPERIMENT_PROGRESS_TIMEOUT
                     ):
-                        # kill the job
+                        # timeout
+                        should_abort = True
+                        if args.enable_plopt:
+                            should_restart = True
+                should_abort_all_nodes = args.mpi_conn.allgather(
+                    should_abort
+                )
+                should_restart_all_nodes = args.mpi_conn.allgather(
+                    should_restart
+                )
+                args.mpi_conn.allgather(
+                    False
+                )
+                if any(should_abort_all_nodes):
+                    # kill the job on all nodes
+                    if p.poll() is None:
                         p.kill()
-                        cleanup_plopt_job()
-                        time.sleep(5)
-                        if not args.enable_plopt:
-                            break
-                        else:
-                            # decrease memory limit and restart
-                            if current_args.plopt_device_memory_limit < 10000:
-                                break
-                            current_args.plopt_device_memory_limit -= 1000
-                            # nuke the result dir
-                            shutil.rmtree(exp_logging_dir)
-                            needs_restart = True
-                            break
+                    cleanup_plopt_job()
+                    if any(should_restart_all_nodes):
+                        should_restart = True
+                    break
                 time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
             cleanup_plopt_job()
-            time.sleep(1)
-            if not needs_restart:
-                print("Proceed to next experiment.")
+            # continue mpi heartbeat since different node may exit at
+            # differnt time
+            while True:
+                # should abort
+                args.mpi_conn.allgather(False)
+                # should restart
+                args.mpi_conn.allgather(should_restart)
+                if all(args.mpi_conn.allgather(True)):
+                    # all nodes have exited
+                    break
+                time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
+            if not should_restart:
+                print_fn("Proceed to next experiment.")
                 break
+            else:
+                # decrease memory limit and restart
+                if current_args.plopt_device_memory_limit < 10000:
+                    break
+                current_args.plopt_device_memory_limit -= 1000
+                # nuke the result dir
+                shutil.rmtree(exp_logging_dir)
+
         # check current experiment status
         current_exp_config.status = ExperimentConfig.parse_experiment_status(
             exp_logging_dir
@@ -945,7 +1006,7 @@ def run_batch_experiments(args):
             current_args.plopt_device_memory_limit = initial_memlimit
 
 
-def _parse_args():
+def _parse_args(mpi_conn):
     parser = argparse.ArgumentParser("Experiment runner for T5 and GPT.")
     parser.add_argument(
         "--experiment_name",
@@ -973,9 +1034,22 @@ def _parse_args():
     parser, exp_group = _add_experiment_args(parser)
     args = parser.parse_args()
 
+    # use mpi to broadcast host ip
+    args.mpi_conn = mpi_conn
+    args.node_rank = mpi_conn.Get_rank()
+    if args.node_rank == 0:
+        # broadcast master_addr
+        if args.master_addr is None:
+            # abort if master_addr is not specified
+            print("ERROR: master_addr must be specified for node 0.")
+            args.mpi_conn.Abort()
+        args.mpi_conn.bcast(args.master_addr, root=0)
+    else:
+        args.master_addr = args.mpi_conn.bcast(None, root=0)
+    args.plopt_kv_host = args.master_addr
     # if experiment config exists, load it
     config_path = os.path.join(EXP_CONFIG_DIR, args.experiment_name + ".json")
-    print(f"Loading experiment config from {config_path}")
+    print_fn(f"Loading experiment config from {config_path}")
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
             config = json.load(f)
@@ -1170,9 +1244,11 @@ def _get_shell_script(args):
 
 
 def main():
-    args, exp_logging_dir, should_skip = _parse_args()
+    from mpi4py import MPI
+    mpi_conn = MPI.COMM_WORLD
+    args, exp_logging_dir, should_skip = _parse_args(mpi_conn)
     if should_skip:
-        print("Experiment directory already exists, skipping.")
+        print_fn("Experiment directory already exists, skipping.")
         return
     if args.batch_experiments:
         run_batch_experiments(args)

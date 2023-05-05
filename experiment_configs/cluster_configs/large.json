@@ -1,8 +1,6 @@
 {
-    "master_addr": "",
     "master_port": 18230,
     "nnodes": 2,
     "gpus_per_node": 8,
-    "plopt_kv_host": "",
     "plopt_kv_port": 6379
 }
