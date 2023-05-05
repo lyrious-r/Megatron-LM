@@ -1060,7 +1060,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             #     pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
             # if not args.plopt_custom_allocator:
             #     torch._C._cuda_attach_out_of_memory_observer(oom_observer)
-        if int(os.environ['LOCAL_RANK']) == 0:
+        if int(os.environ.get('LOCAL_RANK')) == 0:
             logger.info("Running iteration {}...".format(iteration))
         timers('iteration-time').start()
         update_num_microbatches(args.consumed_train_samples)
@@ -1097,7 +1097,6 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
                     trace_alloc_max_entries=100000,
                     trace_alloc_record_context=True,)
             if iteration - orig_iteration == args.nsys_profile_warmup + args.nsys_profile_steps:
-                import os
                 import pickle
                 if not os.path.exists('./memory_trace'):
                     os.makedirs('./memory_trace')
