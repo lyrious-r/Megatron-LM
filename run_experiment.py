@@ -156,7 +156,8 @@ class RedisKVStore(object):
         self.client.set("abort", 1)
 
     def check_abort_signal(self):
-        if self.client.get("abort") == 1:
+        signal = self.client.get("abort")
+        if signal is not None and int(signal.decode()) == 1:
             return True
         return False
 
@@ -870,7 +871,9 @@ class ExperimentConfig:
             return "unknown"
         with open(log_path, "r") as f:
             contents = f.read()
-        if "[after training is done]" in contents:
+        if ("after training is done" in contents or 
+            "Taking poison pill..." in contents or 
+            "Training finished successfully." in contents):
             return "success"
         else:
             return "failure"
@@ -1053,7 +1056,7 @@ def run_batch_experiments(args):
                         for gathered_exp_config in gathered_exp_configs
                     ]
                 ):
-                    print("ERROR: All nodes must have the same experiment config.")
+                    print("ERROR: All nodes must have the same experiment config, but got {}".format(gathered_exp_configs))
                     kv.send_abort_signal()
                     sys.exit(1)
             kv.barrier()

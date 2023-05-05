@@ -172,6 +172,7 @@ def pretrain(train_valid_test_dataset_provider,
                             train_data_iterator, valid_data_iterator,
                             process_non_loss_data_func)
     print_datetime('after training is done')
+    print("Training finished successfully.", flush=True)
     print("Taking poison pill...", flush=True)
     os.system("pkill -f 'pretrain_t5'")
     os.system("pkill -f 'pretrain_gpt'")
