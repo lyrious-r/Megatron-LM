@@ -825,6 +825,7 @@ def cleanup_plopt_job():
 
 
 def run_batch_experiments(args):
+    global print_fn
     past_success_configs = []
     past_failures_configs = []
     exp_dir = os.path.join(EXPERIMENT_DIR_PREFIX, args.experiment_name)
@@ -844,7 +845,7 @@ def run_batch_experiments(args):
     if args.node_rank == 0:
         from tqdm import tqdm
         config_iterator = tqdm(config_iterator)
-        print_fn = tqdm.write
+        print_fn = config_iterator.write
     else:
         print_fn = lambda *args, **kwargs: None
     for current_args, current_exp_config in config_iterator:
@@ -977,7 +978,6 @@ def run_batch_experiments(args):
                     break
                 time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
             if not should_restart:
-                print_fn("Proceed to next experiment.")
                 break
             else:
                 # decrease memory limit and restart
