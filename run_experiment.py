@@ -1031,6 +1031,8 @@ def run_batch_experiments(args):
             continue
         if args.enable_plopt:
             initial_memlimit = current_args.plopt_device_memory_limit
+        assert hasattr(args, "kvstore") and args.kvstore is not None
+        kv: RedisKVStore = args.kvstore
         while True:
             current_args = _check_training_args(current_args)
             current_args, exp_logging_dir, should_skip = _check_logging_args(
@@ -1043,8 +1045,6 @@ def run_batch_experiments(args):
                 # the experiment has been run
                 break
             # barrier before starting the experiment
-            assert hasattr(args, "kvstore") and args.kvstore is not None
-            kv: RedisKVStore = args.kvstore
             kv.barrier()
             # exchange exp config
             gathered_exp_configs = kv.gather(current_exp_config)
