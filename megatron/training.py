@@ -434,10 +434,6 @@ def setup_model_and_optimizer(model_provider_func,
     opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
 
     if args.deepspeed:
-        # We use MPI to launch experiments, whose local rank is unrelated to
-        # training, which confuses DeepSpeed.
-        # Override OMPI_COMM_WORLD_LOCAL_RANK, just to make DeepSpeed happy.
-        os.environ['OMPI_COMM_WORLD_LOCAL_RANK'] = os.environ['LOCAL_RANK']
         import deepspeed
         print_rank_0("DeepSpeed is enabled.")
         assert len(model) == 1, "Interleaved schedule currently do not work" \
