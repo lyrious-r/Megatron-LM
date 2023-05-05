@@ -453,7 +453,9 @@ def _check_logging_args(args):
     # dump all args to a file
     args_file = os.path.join(exp_logging_dir, "args.json")
     with open(args_file, "w") as f:
-        json.dump(vars(args), f, indent=2)
+        args_dict = vars(args)
+        dump_dict = {k: v for k, v in args_dict.items() if k != "mpi_conn"}
+        json.dump(dump_dict, f, indent=2)
     return args, exp_logging_dir, False
 
 
@@ -845,9 +847,7 @@ def run_batch_experiments(args):
         print_fn = tqdm.write
     else:
         print_fn = lambda *args, **kwargs: None
-    for current_args, current_exp_config in config_iterator(
-        args
-    ):
+    for current_args, current_exp_config in config_iterator:
         should_skip = False
         for past_success_config in past_success_configs:
             past_success_config: ExperimentConfig
@@ -891,17 +891,14 @@ def run_batch_experiments(args):
             )
             if args.mpi_conn.rank == 0:
                 # check if all nodes have the same exp config
-                assert all(
+                if not all(
                     [
                         gathered_exp_config == current_exp_config
                         for gathered_exp_config in gathered_exp_configs
                     ]
-                )
-            else:
-                args.mpi_conn.Abort(1)
-                raise RuntimeError(
-                    "All nodes must have the same experiment config."
-                )
+                ):
+                    print("ERROR: All nodes must have the same experiment config.")
+                    args.mpi_conn.Abort(1)
             args.mpi_conn.Barrier()
             current_args = _create_deepspeed_config(
                 current_args, exp_logging_dir
@@ -1034,19 +1031,6 @@ def _parse_args(mpi_conn):
     parser, exp_group = _add_experiment_args(parser)
     args = parser.parse_args()
 
-    # use mpi to broadcast host ip
-    args.mpi_conn = mpi_conn
-    args.node_rank = mpi_conn.Get_rank()
-    if args.node_rank == 0:
-        # broadcast master_addr
-        if args.master_addr is None:
-            # abort if master_addr is not specified
-            print("ERROR: master_addr must be specified for node 0.")
-            args.mpi_conn.Abort()
-        args.mpi_conn.bcast(args.master_addr, root=0)
-    else:
-        args.master_addr = args.mpi_conn.bcast(None, root=0)
-    args.plopt_kv_host = args.master_addr
     # if experiment config exists, load it
     config_path = os.path.join(EXP_CONFIG_DIR, args.experiment_name + ".json")
     print_fn(f"Loading experiment config from {config_path}")
@@ -1137,6 +1121,20 @@ def _parse_args(mpi_conn):
         ],
         switch_arg="enable_plopt",
     )
+
+    # use mpi to broadcast host ip
+    args.mpi_conn = mpi_conn
+    args.node_rank = mpi_conn.Get_rank()
+    if args.node_rank == 0:
+        # broadcast master_addr
+        if args.master_addr == "localhost" and args.nnodes > 1:
+            # abort if master_addr is not specified
+            print("ERROR: master_addr must be specified for node 0.")
+            args.mpi_conn.Abort()
+        args.mpi_conn.bcast(args.master_addr, root=0)
+    else:
+        args.master_addr = args.mpi_conn.bcast(None, root=0)
+    args.plopt_kv_host = args.master_addr
 
     # check args
     args = _check_cluster_args(args)
