@@ -1086,9 +1086,8 @@ def run_batch_experiments(args):
                     "No feasible schedule" in current_content or 
                     "OutOfMemoryError" in current_content):
                     # error
+                    print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
-                    if args.enable_plopt:
-                        should_restart = True
                 elif current_content != prev_content:
                     # progress
                     prev_content = current_content
@@ -1109,6 +1108,8 @@ def run_batch_experiments(args):
                     kv.set(spec_basename + "status", "abort")
                 # get the most updated status from all nodes
                 current_status = kv.get(spec_basename + "status")
+                if current_status is not None:
+                    current_status = current_status.decode()
                 should_abort = current_status in ["abort", "restart"]
                 should_restart = current_status == "restart"
                 if should_abort:
@@ -1124,6 +1125,8 @@ def run_batch_experiments(args):
             kv.barrier()
             # check restart status again incase some nodes exit early
             current_status = kv.get(spec_basename + "status")
+            if current_status is not None:
+                current_status = current_status.decode()
             should_restart = current_status == "restart"
             cleanup_plopt_job(args)
             if not should_restart:
@@ -1135,6 +1138,10 @@ def run_batch_experiments(args):
                 current_args.plopt_device_memory_limit -= 1000
                 # nuke the result dir
                 shutil.rmtree(exp_logging_dir)
+                if args.node_rank == 0:
+                    # reset the status
+                    kv.set(spec_basename + "status", "running")
+                kv.barrier()
 
         # check current experiment status
         current_exp_config.status = ExperimentConfig.parse_experiment_status(
