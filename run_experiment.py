@@ -694,7 +694,7 @@ def grid_search_parallelism(args):
             yield (dp, tp, pp)
 
 
-def grid_search_ds_stage(args):
+def grid_search_ds_stage(args, reduce_configs=False):
     if args.model_type == "t5" and args.pipeline_parallel_size > 1:
         # since we use interleaved schedule for t5, we cannot use DS
         yield (False, 0)
@@ -705,9 +705,15 @@ def grid_search_ds_stage(args):
     else:
         # we can use zero 1, 2 with data and tensor parallelism
         stage_candidates = [2, 0]
-    for ds_stage in stage_candidates:
-        enable_ds = ds_stage > 0
-        yield (enable_ds, ds_stage)
+    if reduce_configs:
+        if args.pipeline_parallel_size > 1 or args.enable_plopt:
+            yield (True, 1)
+        else:
+            yield (True, 2)
+    else:
+        for ds_stage in stage_candidates:
+            enable_ds = ds_stage > 0
+            yield (enable_ds, ds_stage)
 
 
 def grid_search_microbatch_size(dp_size, args):
@@ -731,7 +737,7 @@ def grid_search_recomputation(args):
         # plopt use dynamic recomputation
         yield "none"
         return
-    for recompute_level in ["full", "selective", "none"]:
+    for recompute_level in ["none", "selective", "full"]:
         yield recompute_level
 
 
@@ -854,12 +860,14 @@ class ExperimentConfig:
             return False
         # dominance happens if sequence length is higher, mbs is higher,
         # rc level is lower, and ds_level is lower
+        # note: we only test the lowest level of rc that can be run without
+        # OOM to reduce grid search time
         if (
             self.enc_seqlen >= other.enc_seqlen
             and self.dec_seqlen >= other.dec_seqlen
-            and self.mbs >= other.mbs
-            and RC_MAP[self.rc] <= RC_MAP[other.rc]
+            and (self.mbs >= other.mbs
             and self.ds_level <= other.ds_level
+            or RC_MAP[self.rc] <= RC_MAP[other.rc])
         ):
             return True
         return False
@@ -941,7 +949,7 @@ def generate_dynapipe_exp_configs(args):
                     for recompute_level in grid_search_recomputation(args):
                         args.recompute_level = recompute_level
                         ####  ZeRO Stage  ####
-                        for enable_ds, ds_stage in grid_search_ds_stage(args):
+                        for enable_ds, ds_stage in grid_search_ds_stage(args, reduce_configs=True):
                             args.enable_deepspeed = enable_ds
                             args.deepspeed_zero_stage = ds_stage
                             # config
