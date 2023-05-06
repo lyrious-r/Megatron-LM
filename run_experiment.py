@@ -560,13 +560,11 @@ def _check_logging_args(args):
         )
     if args.enable_deepspeed:
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
-    exp_name = args.experiment_name
     if args.enable_plopt and args.plopt_enable_packing:
-        exp_name += "_spp"
         exp_spec_name += "_spp" # for seqlen preserving packing
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
-        exp_name,
+        args.experiment_name,
         exp_spec_name,
     )
     if os.path.exists(exp_logging_dir):
@@ -1218,7 +1216,8 @@ def _parse_args():
     args = parser.parse_args()
 
     # if experiment config exists, load it
-    config_path = os.path.join(EXP_CONFIG_DIR, args.experiment_name + ".json")
+    config_name = args.experiment_name[-4] + ".json" if args.experiment_name.endswith("_spp") else args.experiment_name + ".json"
+    config_path = os.path.join(EXP_CONFIG_DIR, config_name)
     print_fn(f"Loading experiment config from {config_path}")
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
@@ -1307,6 +1306,8 @@ def _parse_args():
         ],
         switch_arg="enable_plopt",
     )
+
+
 
     # init kvstore for exp control
     kvstore = RedisKVStore(args)
