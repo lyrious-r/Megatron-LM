@@ -701,10 +701,10 @@ def grid_search_ds_stage(args):
         return
     if args.pipeline_parallel_size > 1 or args.enable_plopt:
         # we can only use zero 1 with pipeline parallelism or with plopt
-        stage_candidates = [0, 1]
+        stage_candidates = [1, 0]
     else:
         # we can use zero 1, 2 with data and tensor parallelism
-        stage_candidates = [0, 1, 2]
+        stage_candidates = [2, 0]
     for ds_stage in stage_candidates:
         enable_ds = ds_stage > 0
         yield (enable_ds, ds_stage)
@@ -721,7 +721,7 @@ def grid_search_microbatch_size(dp_size, args):
     if per_gpu_batch_size == 0:
         # cannot run
         return
-    for mbs in [x for x in reversed(_get_pow_of_2s_up_to(per_gpu_batch_size)) if x < 128]:
+    for mbs in [x for x in _get_pow_of_2s_up_to(per_gpu_batch_size, reduced_number=True) if x < 128]:
         if expected_gbs % mbs == 0:
             yield mbs
 
@@ -731,7 +731,7 @@ def grid_search_recomputation(args):
         # plopt use dynamic recomputation
         yield "none"
         return
-    for recompute_level in ["none", "selective", "full"]:
+    for recompute_level in ["full", "selective", "none"]:
         yield recompute_level
 
 
@@ -831,7 +831,7 @@ class ExperimentConfig:
         # and rc level is lower
         if (
             self.ds_level <= other.ds_level
-            and self.mbs >= other.mbs
+            and (self.mbs >= other.mbs and self.pp_size == 1)
             and RC_MAP[self.rc] <= RC_MAP[other.rc]
         ):
             return True
