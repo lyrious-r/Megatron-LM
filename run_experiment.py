@@ -560,11 +560,13 @@ def _check_logging_args(args):
         )
     if args.enable_deepspeed:
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
+    exp_name = args.experiment_name
     if args.enable_plopt and args.plopt_enable_packing:
+        exp_name += "_spp"
         exp_spec_name += "_spp" # for seqlen preserving packing
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
-        args.experiment_name,
+        exp_name,
         exp_spec_name,
     )
     if os.path.exists(exp_logging_dir):
