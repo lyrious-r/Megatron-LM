@@ -1216,7 +1216,7 @@ def _parse_args():
     args = parser.parse_args()
 
     # if experiment config exists, load it
-    config_name = args.experiment_name[-4] + ".json" if args.experiment_name.endswith("_spp") else args.experiment_name + ".json"
+    config_name = (args.experiment_name[:-4] + ".json") if args.experiment_name.endswith("_spp") else (args.experiment_name + ".json")
     config_path = os.path.join(EXP_CONFIG_DIR, config_name)
     print_fn(f"Loading experiment config from {config_path}")
     if os.path.exists(config_path):
