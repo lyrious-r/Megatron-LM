@@ -1,0 +1,8 @@
+{
+    "encoder_num_layers": 48,
+    "decoder_num_layers": 48,
+    "hidden_size": 1024,
+    "num_attn_heads": 128,
+    "kv_channels": 128,
+    "ffn_hidden_size": 65536
+}
