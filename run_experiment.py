@@ -1216,7 +1216,8 @@ def _parse_args():
     args = parser.parse_args()
 
     # if experiment config exists, load it
-    config_path = os.path.join(EXP_CONFIG_DIR, args.experiment_name + ".json")
+    config_name = (args.experiment_name[:-4] + ".json") if args.experiment_name.endswith("_spp") else (args.experiment_name + ".json")
+    config_path = os.path.join(EXP_CONFIG_DIR, config_name)
     print_fn(f"Loading experiment config from {config_path}")
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
@@ -1305,6 +1306,8 @@ def _parse_args():
         ],
         switch_arg="enable_plopt",
     )
+
+
 
     # init kvstore for exp control
     kvstore = RedisKVStore(args)
