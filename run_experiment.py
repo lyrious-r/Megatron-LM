@@ -835,10 +835,13 @@ class ExperimentConfig:
             return False
         # dominance happens if ds_level is lower, and mbs is higher,
         # and rc level is lower
+        # Note: we only test the lowest rc level that can run to reduce
+        # grid search time
         if (
-            self.ds_level <= other.ds_level
-            and (self.mbs >= other.mbs and self.pp_size == 1)
-            and RC_MAP[self.rc] <= RC_MAP[other.rc]
+            RC_MAP[self.rc] < RC_MAP[other.rc] or
+            (RC_MAP[self.rc] == RC_MAP[other.rc] and
+            (self.ds_level <= other.ds_level) and
+            (self.mbs >= other.mbs and self.pp_size == 1))
         ):
             return True
         return False
@@ -860,14 +863,12 @@ class ExperimentConfig:
             return False
         # dominance happens if sequence length is higher, mbs is higher,
         # rc level is lower, and ds_level is lower
-        # note: we only test the lowest level of rc that can be run without
-        # OOM to reduce grid search time
         if (
             self.enc_seqlen >= other.enc_seqlen
             and self.dec_seqlen >= other.dec_seqlen
-            and (self.mbs >= other.mbs
+            and self.mbs >= other.mbs
             and self.ds_level <= other.ds_level
-            or RC_MAP[self.rc] <= RC_MAP[other.rc])
+            and RC_MAP[self.rc] <= RC_MAP[other.rc]
         ):
             return True
         return False
