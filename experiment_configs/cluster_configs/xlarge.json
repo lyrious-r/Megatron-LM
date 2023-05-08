@@ -1,0 +1,9 @@
+{
+    "master_addr": "",
+    "master_port": 18230,
+    "nnodes": 4,
+    "gpus_per_node": 8,
+    "plopt_kv_host": "",
+    "plopt_kv_port": 6379,
+    "node_rank": 0
+}
