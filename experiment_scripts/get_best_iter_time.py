@@ -24,6 +24,7 @@ class ExperimentConfig:
     mbs: int = 1
     rc: str = "none"
     ds_level: int = 0
+    spp: bool = False
     status: str = "unknown"
 
     def speed_dominates(self, other):
@@ -39,14 +40,18 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
+            or self.spp != other.spp
         ):
             return False
         # dominance happens if ds_level is lower, and mbs is higher,
         # and rc level is lower
+        # Note: we only test the lowest rc level that can run to reduce
+        # grid search time
         if (
-            self.ds_level <= other.ds_level
-            and self.mbs >= other.mbs
-            and RC_MAP[self.rc] <= RC_MAP[other.rc]
+            RC_MAP[self.rc] < RC_MAP[other.rc] or
+            (RC_MAP[self.rc] == RC_MAP[other.rc] and
+            (self.ds_level <= other.ds_level) and
+            (self.mbs >= other.mbs and self.pp_size == 1))
         ):
             return True
         return False
@@ -63,6 +68,7 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
+            or self.spp != other.spp
         ):
             return False
         # dominance happens if sequence length is higher, mbs is higher,
@@ -71,8 +77,8 @@ class ExperimentConfig:
             self.enc_seqlen >= other.enc_seqlen
             and self.dec_seqlen >= other.dec_seqlen
             and self.mbs >= other.mbs
-            and RC_MAP[self.rc] <= RC_MAP[other.rc]
             and self.ds_level <= other.ds_level
+            and RC_MAP[self.rc] <= RC_MAP[other.rc]
         ):
             return True
         return False
@@ -84,7 +90,9 @@ class ExperimentConfig:
             return "unknown"
         with open(log_path, "r") as f:
             contents = f.read()
-        if "[after training is done]" in contents:
+        if ("after training is done" in contents or 
+            "Taking poison pill..." in contents or 
+            "Training finished successfully." in contents):
             return "success"
         else:
             return "failure"
@@ -115,6 +123,8 @@ class ExperimentConfig:
                 config.rc = item[2:]
             elif item.startswith("zero"):
                 config.ds_level = int(item[4:])
+            elif item.startswith("spp"):
+                config.spp = True
         # test status
         config.status = ExperimentConfig.parse_experiment_status(exp_dir)
         return config
@@ -130,7 +140,7 @@ def get_iter_time(fn: str):
                 return float("inf")
     if len(times) == 0:
         return float("inf")
-    return np.mean(times[1:]) # skip first 20 iteration as warmup
+    return np.mean(times[2:]) # skip first 20 iteration as warmup
 
 def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file):
     subdirs = [o for o in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir,o))]

@@ -38,6 +38,7 @@ class RedisKVStore(object):
         self.port = EXP_REDIS_PORT
         self.n_processes = args.nnodes
         self.barrier_cnt = 0
+        self.gather_cnt = 0
         if self.is_master:
             self.server = self._run_redis_server()
         # wait for redis server to start
@@ -55,6 +56,7 @@ class RedisKVStore(object):
                         "Is PLOPT_KV_HOST and PLOPT_KV_PORT set correctly?"
                     )
                 continue
+        print("Connected to KV Server at {}:{}, {} processes in total.".format(self.host, self.port, self.n_processes))
 
     def __del__(self):
         if self.is_master:
@@ -131,26 +133,28 @@ class RedisKVStore(object):
         if self.check_abort_signal():
             raise RuntimeError("Abort signal received")
         # synchronous gather
-        ack_key = "gather_ack"
+        ack_key = f"gather_ack_{self.gather_cnt}"
         if self.node_rank == 0:
             recved_objs = [obj]
             # read from all keys
             for i in range(1, self.n_processes):
-                key = "gather_r{}".format(i)
+                key = "gather_{}_r{}".format(self.gather_cnt, i)
                 self.wait(key)
                 recved_objs.append(pickle.loads(self.client.get(key)))
                 self.delete_key(key)
             # set ack key
             self.set(ack_key, "1")
+            self.gather_cnt += 1
             return recved_objs
         else:
             # delete ack key
             self.delete_key(ack_key)
-            key = "gather_r{}".format(self.node_rank)
+            key = "gather_{}_r{}".format(self.gather_cnt, self.node_rank)
             self.client.set(key, pickle.dumps(obj))
             # wait for ack key before returning
             self.wait(ack_key)
-        return
+            self.gather_cnt += 1
+            return
 
     def send_abort_signal(self):
         self.client.set("abort", 1)
@@ -1047,6 +1051,7 @@ def run_batch_experiments(args):
             spec_basename = os.path.basename(exp_logging_dir)
             config_iterator.set_description("Running experiment {}".format(spec_basename))
             if should_skip:
+                print_fn("Skip {} because it has already been run.".format(spec_basename))
                 # the experiment has been run
                 break
             # barrier before starting the experiment
@@ -1158,7 +1163,7 @@ def run_batch_experiments(args):
                     # reset the status
                     kv.set(spec_basename + "status", "running")
                 kv.barrier()
-
+        print_fn("Exchanging status for experiment {}.".format(current_exp_config))
         # check current experiment status
         current_exp_config.status = ExperimentConfig.parse_experiment_status(
             exp_logging_dir

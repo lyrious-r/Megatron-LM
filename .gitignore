@@ -32,3 +32,4 @@ _memory_viz.py
 /experiments/*
 microbenchmark_*.log
 /*.jsonl
+/experiment_results/*
