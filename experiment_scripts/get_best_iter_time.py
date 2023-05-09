@@ -142,7 +142,7 @@ def get_iter_time(fn: str):
         return float("inf")
     return np.mean(times[2:]) # skip first 20 iteration as warmup
 
-def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file):
+def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file, export_all_exps=False):
     subdirs = [o for o in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir,o))]
     filtered_subdirs = []
     for subdir in subdirs:
@@ -154,26 +154,42 @@ def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file):
 
     best_time = float("inf")
     best_config = None
+    all_exps = []
     for matched_dir in filtered_subdirs:
         fn = os.path.join(args.dir, matched_dir, "stdout_stderr.log")
         if os.path.exists(fn):
             iter_time = get_iter_time(fn)
-            if iter_time < best_time:
-                best_time = iter_time
+            if export_all_exps:
                 exp_config = ExperimentConfig.parse_history_experiments(os.path.join(args.dir, matched_dir))
-                best_config = exp_config
-    if best_config is None:
+                log_json = {
+                    "Encoder SeqLen": enc_seqlen,
+                    "Decoder SeqLen": dec_seqlen,
+                    "Global Batch Size": gbs,
+                    "Iteration Time (ms)": iter_time,
+                    "Config": asdict(exp_config),
+                }
+                all_exps.append(log_json)
+            else:
+                if iter_time < best_time:
+                    best_time = iter_time
+                    exp_config = ExperimentConfig.parse_history_experiments(os.path.join(args.dir, matched_dir))
+                    best_config = exp_config
+    if best_config is None and len(all_exps) == 0:
         print("No successful experiment found for enc seqlen {}, dec seqlen {}, gbs {}".format(enc_seqlen, dec_seqlen, gbs))
         return
-    log_json = {
-        "Encoder SeqLen": enc_seqlen,
-        "Decoder SeqLen": dec_seqlen,
-        "Global Batch Size": gbs,
-        "Best Time (ms)": best_time,
-        "Best Config": asdict(best_config),
-    }
-    with jsonlines.open(out_file, mode='a') as writer:
-        writer.write(log_json)
+    if not export_all_exps:
+        log_json = {
+            "Encoder SeqLen": enc_seqlen,
+            "Decoder SeqLen": dec_seqlen,
+            "Global Batch Size": gbs,
+            "Best Time (ms)": best_time,
+            "Best Config": asdict(best_config),
+        }
+        with jsonlines.open(out_file, mode='a') as writer:
+            writer.write(log_json)
+    else:
+        with jsonlines.open(out_file, mode='a') as writer:
+            writer.write_all(all_exps)
 
 
 parser = argparse.ArgumentParser()
@@ -181,6 +197,8 @@ parser.add_argument("-i", "--dir", type=str, required=True)
 parser.add_argument("-e", "--enc_seqlen", nargs="+", type=int)
 parser.add_argument("-d", "--dec_seqlen", nargs="+", type=int)
 parser.add_argument("-g", "--gbs", nargs="+", type=int)
+parser.add_argument("-a", "--all", action="store_true", default=False,
+                    help="Parse all experiments in the directory instead of only the best ones.")
 parser.add_argument("-o", "--out", type=str)
 
 args = parser.parse_args()
@@ -207,6 +225,8 @@ else:
 
 if not args.out:
     exp_name = os.path.basename(os.path.normpath(args.dir))
+    if args.all:
+        exp_name += "_all_specs"
     args.out = exp_name + ".jsonl"
 
 print("Collecting logs for enc_seqlen range: {}, dec_seqlen range: {}, gbs range: {}".format(args.enc_seqlen, args.dec_seqlen, args.gbs))
@@ -219,4 +239,4 @@ if os.path.exists(args.out):
 for enc_seqlen in args.enc_seqlen:
     for dec_seqlen in args.dec_seqlen:
         for gbs in args.gbs:
-            parse_exp_logs(enc_seqlen, dec_seqlen, gbs, args.out)
+            parse_exp_logs(enc_seqlen, dec_seqlen, gbs, args.out, args.all)
