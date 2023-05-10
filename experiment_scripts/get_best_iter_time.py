@@ -3,6 +3,7 @@ import sys
 import argparse
 from dataclasses import dataclass, asdict
 import jsonlines
+import pickle
 import numpy as np
 
 # copied from run_experiment.py
@@ -142,6 +143,71 @@ def get_iter_time(fn: str):
         return float("inf")
     return np.mean(times[2:]) # skip first 20 iteration as warmup
 
+def get_batching_efficiency(max_enc_seqlen, max_dec_seqlen, dir):
+    if "plopt" in dir:
+        # read from plopt log
+        per_iter_mb_shapes = []
+        per_iter_seqlens = []
+        seqlens_prefix = os.path.join(dir, "plopt_ep_stats", "orig_seq_lens")
+        fns = sorted(os.listdir(seqlens_prefix), key=lambda x: int(x.split(".")[0].split("_")[1]))
+        for fn in fns:
+            with open(os.path.join(seqlens_prefix, fn), "rb") as f:
+                input_seqlens, target_seqlens = pickle.load(f)
+            per_iter_seqlens.append((input_seqlens, target_seqlens))
+        mb_shapes_prefix = os.path.join(dir, "plopt_ep_stats", "per_iter_mb_shapes")
+        fns = sorted(os.listdir(mb_shapes_prefix), key=lambda x: int(x.split(".")[0].split("_")[1]))
+        for fn in fns:
+            iteration = int(fn.split(".")[0].split("_")[1])
+            while len(per_iter_mb_shapes) <= iteration:
+                per_iter_mb_shapes.append([])
+            with open(os.path.join(mb_shapes_prefix, fn), "rb") as f:
+                mb_shapes = pickle.load(f)
+            per_iter_mb_shapes[iteration] += mb_shapes
+        # compute efficiency
+        n_iters = min(len(per_iter_mb_shapes), len(per_iter_seqlens))
+        enc_effs = []
+        dec_effs = []
+        for i in range(n_iters):
+            truncated_enc_seqlens = np.minimum(per_iter_seqlens[i][0], max_enc_seqlen)
+            truncated_dec_seqlens = np.minimum(per_iter_seqlens[i][1], max_dec_seqlen)
+            all_enc_tokens = truncated_enc_seqlens.sum()
+            all_dec_tokens = truncated_dec_seqlens.sum()
+            all_microbatch_enc_tokens = 0
+            all_microbatch_dec_tokens = 0
+            for mb in per_iter_mb_shapes[i]:
+                all_microbatch_enc_tokens += mb[0] * mb[1]
+                all_microbatch_dec_tokens += mb[0] * mb[2]
+            if all_microbatch_enc_tokens == 0:
+                # missing data
+                continue
+            enc_effs.append(all_enc_tokens / all_microbatch_enc_tokens)
+            if all_microbatch_dec_tokens != 0:
+                dec_effs.append(all_dec_tokens / all_microbatch_dec_tokens)
+            else:
+                dec_effs.append(0)
+        return np.mean(enc_effs), np.mean(dec_effs)
+    else:
+        # directly parse from log
+        with open(os.path.join(dir, "stdout_stderr.log"), "r") as f:
+            max_samples = 0
+            result_enc_eff = 0
+            result_dec_eff = 0
+            for line in f:
+                if line.startswith(">>>> Pack samples:"):
+                    splitted_line = line.replace("/", " ").replace(",", " ").split(" ")
+                    all_numbers = []
+                    for token in splitted_line:
+                        try:
+                            all_numbers.append(float(token))
+                        except:
+                            pass
+                    nsamples, _, _, enc_eff, dec_eff = all_numbers
+                    if nsamples > max_samples:
+                        result_enc_eff = enc_eff
+                        result_dec_eff = dec_eff
+                        max_samples = nsamples
+            return result_enc_eff, result_dec_eff
+
 def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file, export_all_exps=False):
     subdirs = [o for o in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir,o))]
     filtered_subdirs = []
@@ -154,6 +220,8 @@ def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file, export_all_exps=False)
 
     best_time = float("inf")
     best_config = None
+    best_enc_eff = 0
+    best_dec_eff = 0
     all_exps = []
     for matched_dir in filtered_subdirs:
         fn = os.path.join(args.dir, matched_dir, "stdout_stderr.log")
@@ -173,6 +241,7 @@ def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file, export_all_exps=False)
                 if iter_time < best_time:
                     best_time = iter_time
                     exp_config = ExperimentConfig.parse_history_experiments(os.path.join(args.dir, matched_dir))
+                    best_enc_eff, best_dec_eff = get_batching_efficiency(enc_seqlen, dec_seqlen, os.path.join(args.dir, matched_dir))
                     best_config = exp_config
     if best_config is None and len(all_exps) == 0:
         print("No successful experiment found for enc seqlen {}, dec seqlen {}, gbs {}".format(enc_seqlen, dec_seqlen, gbs))
@@ -184,6 +253,8 @@ def parse_exp_logs(enc_seqlen, dec_seqlen, gbs, out_file, export_all_exps=False)
             "Global Batch Size": gbs,
             "Best Time (ms)": best_time,
             "Best Config": asdict(best_config),
+            "Encoder Padding Efficiency": best_enc_eff,
+            "Decoder Padding Efficiency": best_dec_eff,
         }
         with jsonlines.open(out_file, mode='a') as writer:
             writer.write(log_json)
