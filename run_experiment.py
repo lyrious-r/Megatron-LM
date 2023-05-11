@@ -990,7 +990,8 @@ def read_dynapipe_exp_configs(args):
     with jsonlines.open(config_path, "r") as reader:
         for obj in reader:
             for k, v in obj.items():
-                setattr(args, k, v)
+                if k != "plopt_enable_packing":
+                    setattr(args, k, v)
             if args.pipeline_parallel_size > 1:
                 args.pp_split_rank = get_pp_split_rank(args.pipeline_parallel_size)
             args.plopt_device_to_node = get_pp_device_to_node_str(args)
@@ -1366,10 +1367,15 @@ def _parse_args():
 
     # if experiment config exists, load it
     if args.experiment_name.endswith("_spp"):
+        args.plopt_enable_packing = True
         config_name = args.experiment_name[:-4] + ".json"
     elif args.experiment_name.endswith("_best"):
-        config_name = args.experiment_name[:-5] + ".json"
-        args.run_best_config = os.path.join(BEST_CONFIG_DIR, args.experiment_name[:-5] + ".jsonl")
+        raw_config_name = args.experiment_name[:-5]
+        if raw_config_name.endswith("_spp"):
+            args.plopt_enable_packing = True
+            raw_config_name = raw_config_name[:-4]
+        config_name = raw_config_name + ".json"
+        args.run_best_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
         print_fn("Using best config: {}".format(args.run_best_config))
     else:
         config_name = args.experiment_name + ".json"
