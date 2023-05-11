@@ -197,7 +197,7 @@ def print_rank_0(message):
     """If distributed is initialized, print only on rank 0."""
     if torch.distributed.is_initialized():
         # if torch.distributed.get_rank() == 0:
-        if os.environ.get('LOCAL_RANK', 0) == 0:
+        if int(os.environ.get('LOCAL_RANK')) == 0:
             print(message, flush=True)
     else:
         print(message, flush=True)
@@ -210,7 +210,7 @@ def print_rank_last(message):
     """If distributed is initialized, print only on last rank."""
     if torch.distributed.is_initialized():
         # if is_last_rank():
-        if os.environ.get('LOCAL_RANK', 0) == 0:
+        if int(os.environ.get('LOCAL_RANK')) == 0:
             print(message, flush=True)
     else:
         print(message, flush=True)
