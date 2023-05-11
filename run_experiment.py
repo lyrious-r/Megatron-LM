@@ -37,7 +37,7 @@ class RedisKVStore(object):
         self.node_rank = args.node_rank
         self.is_master = args.node_rank == 0
         self.host = args.master_addr
-        self.port = EXP_REDIS_PORT
+        self.port = hash(args.experiment_name) % 65535 + 3000
         self.n_processes = args.nnodes
         self.barrier_cnt = 0
         self.gather_cnt = 0
