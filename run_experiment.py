@@ -1368,8 +1368,11 @@ def _parse_args():
     if args.experiment_name.endswith("_spp"):
         config_name = args.experiment_name[:-4] + ".json"
     elif args.experiment_name.endswith("_best"):
-        config_name = args.experiment_name[:-5] + ".json"
-        args.run_best_config = os.path.join(BEST_CONFIG_DIR, args.experiment_name[:-5] + ".jsonl")
+        raw_config_name = args.experiment_name[:-5]
+        if raw_config_name.endswith("_spp"):
+            raw_config_name = raw_config_name[:-4]
+        config_name = raw_config_name + ".json"
+        args.run_best_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
         print_fn("Using best config: {}".format(args.run_best_config))
     else:
         config_name = args.experiment_name + ".json"
