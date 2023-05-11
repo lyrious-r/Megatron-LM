@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from string import Template
 from typing import Optional
 import pickle
+import jsonlines
 import datetime
 import redis
 
+BEST_CONFIG_DIR = "./experiment_configs/best_configs"
 EXP_CONFIG_DIR = "./experiment_configs"
 TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_{}.template")
 DEEPSPEED_TEMPLATE_PATH = os.path.join(
@@ -538,34 +540,16 @@ def _add_experiment_args(parser):
         default="16384,32768,65536,131072",
         help="Global batch size range.",
     )
+    group.add_argument(
+        "--run_best_config",
+        type=str,
+        help="Run the experiments specified by the config.",
+    )
     return parser, group
 
 
 def _check_logging_args(args):
-    nranks = args.nnodes * args.gpus_per_node
-    pp_times_tp = args.tensor_parallel_size * args.pipeline_parallel_size
-    dp_size = nranks // pp_times_tp
-    exp_spec_name = "dp{}_tp{}_pp{}".format(
-        dp_size, args.tensor_parallel_size, args.pipeline_parallel_size
-    )
-    if args.model_type == "gpt":
-        exp_spec_name += "_sl{}_gbs{}".format(
-            args.seq_length, args.tokens_per_global_batch
-        )
-    else:
-        exp_spec_name += "_encsl{}_decsl{}_gbs{}".format(
-            args.encoder_seq_length,
-            args.decoder_seq_length,
-            args.tokens_per_global_batch,
-        )
-    if not args.enable_plopt:
-        exp_spec_name += "_mbs{}_rc{}".format(
-            args.micro_batch_size, args.recompute_level
-        )
-    if args.enable_deepspeed:
-        exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
-    if args.enable_plopt and args.plopt_enable_packing:
-        exp_spec_name += "_spp" # for seqlen preserving packing
+    exp_spec_name = get_exp_spec_name(args)
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
         args.experiment_name,
@@ -973,6 +957,46 @@ def generate_dynapipe_exp_configs(args):
                             config.ds_level = args.deepspeed_zero_stage
                             yield args, config
 
+def get_exp_spec_name(args):
+    nranks = args.nnodes * args.gpus_per_node
+    pp_times_tp = args.tensor_parallel_size * args.pipeline_parallel_size
+    dp_size = nranks // pp_times_tp
+    exp_spec_name = "dp{}_tp{}_pp{}".format(
+        dp_size, args.tensor_parallel_size, args.pipeline_parallel_size
+    )
+    if args.model_type == "gpt":
+        exp_spec_name += "_sl{}_gbs{}".format(
+            args.seq_length, args.tokens_per_global_batch
+        )
+    else:
+        exp_spec_name += "_encsl{}_decsl{}_gbs{}".format(
+            args.encoder_seq_length,
+            args.decoder_seq_length,
+            args.tokens_per_global_batch,
+        )
+    if not args.enable_plopt:
+        exp_spec_name += "_mbs{}_rc{}".format(
+            args.micro_batch_size, args.recompute_level
+        )
+    if args.enable_deepspeed:
+        exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
+    if args.enable_plopt and args.plopt_enable_packing:
+        exp_spec_name += "_spp" # for seqlen preserving packing
+    return exp_spec_name
+
+
+def read_dynapipe_exp_configs(args):
+    config_path = args.run_best_config
+    with jsonlines.open(config_path, "r") as reader:
+        for obj in reader:
+            for k, v in obj.items():
+                setattr(args, k, v)
+            if args.pipeline_parallel_size > 1:
+                args.pp_split_rank = get_pp_split_rank(args.pipeline_parallel_size)
+                args.plopt_device_to_node = get_pp_device_to_node_str(args)
+                args.plopt_layer_to_device = get_layer_to_device(args)
+            args.train_iters = 1000000000
+            yield args
 
 def pgrep():
     out = os.popen("pgrep redis").read().strip()
@@ -1192,6 +1216,125 @@ def run_batch_experiments(args):
         if args.enable_plopt:
             current_args.plopt_device_memory_limit = initial_memlimit
 
+def run_best_config(args):
+    global print_fn
+    config_iterator = read_dynapipe_exp_configs(args)
+    from tqdm import tqdm
+    config_iterator = tqdm(config_iterator)
+    print_fn = config_iterator.write
+    for current_args in config_iterator:
+        if args.enable_plopt:
+            initial_memlimit = current_args.plopt_device_memory_limit
+        assert hasattr(args, "kvstore") and args.kvstore is not None
+        kv: RedisKVStore = args.kvstore
+        while True:
+            current_args = _check_training_args(current_args)
+            current_args, exp_logging_dir, should_skip = _check_logging_args(
+                current_args
+            )
+            spec_basename = os.path.basename(exp_logging_dir)
+            config_iterator.set_description("Running experiment {}".format(spec_basename))
+            if should_skip:
+                print_fn("Skip {} because it has already been run.".format(spec_basename))
+                # the experiment has been run
+                break
+            # barrier before starting the experiment
+            kv.barrier()
+            current_args = _create_deepspeed_config(
+                current_args, exp_logging_dir
+            )
+            shell_script = _get_shell_script(current_args)
+            shell_script_path = os.path.join(exp_logging_dir, "run.sh")
+            with open(shell_script_path, "w") as f:
+                f.write(shell_script)
+            # all stdout and stderr are redirected to current_args.stdout_stderr_log
+            p = subprocess.Popen(f"bash {shell_script_path}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            assert (
+                current_args.stdout_stderr_log is not None
+            ), "stdout_stderr_log must be specified for batch experiments."
+            prev_content = None
+            last_progress = time.time()
+            should_restart = False
+            while p.poll() is None:
+                # check if the stdout/stderr log has progress
+                if not os.path.exists(current_args.stdout_stderr_log):
+                    # the job has not started yet
+                    time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
+                    continue
+                should_abort = False
+                with open(current_args.stdout_stderr_log, "r") as f:
+                    current_content = f.read()
+                if ("Failed to generate microbatches." in current_content or 
+                    "No feasible schedule" in current_content or 
+                    "OutOfMemoryError" in current_content or 
+                    "RuntimeError" in current_content or 
+                    "CUDA out of memory" in current_content):
+                    # error
+                    print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
+                    should_abort = True
+                elif current_content != prev_content:
+                    # progress
+                    prev_content = current_content
+                    last_progress = time.time()
+                else:
+                    # no progress
+                    if (
+                        time.time() - last_progress
+                        > EXPERIMENT_PROGRESS_TIMEOUT
+                    ):
+                        # timeout
+                        print_fn("Timeout running spec {}.".format(spec_basename))
+                        should_abort = True
+                        if args.enable_plopt:
+                            should_restart = True
+                if should_abort and should_restart:
+                    print_fn("Setting status to restart for spec {}.".format(spec_basename))
+                    kv.set(spec_basename + "status", "restart")
+                elif should_abort:
+                    print_fn("Setting status to abort for spec {}.".format(spec_basename))
+                    kv.set(spec_basename + "status", "abort")
+                # get the most updated status from all nodes
+                current_status = kv.get(spec_basename + "status")
+                if current_status is not None:
+                    current_status = current_status.decode()
+                should_abort = current_status in ["abort", "restart"]
+                should_restart = current_status == "restart"
+                if should_abort:
+                    print_fn("Abort running spec {}.".format(spec_basename))
+                    # kill the job on all nodes
+                    if p.poll() is None:
+                        p.kill()
+                    cleanup_plopt_job(args)
+                    break
+                # check if the entire script needs to abort
+                if kv.check_abort_signal():
+                    sys.exit(1)
+                time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
+            kv.barrier()
+            # check restart status again incase some nodes exit early
+            current_status = kv.get(spec_basename + "status")
+            if current_status is not None:
+                current_status = current_status.decode()
+            should_restart = current_status == "restart"
+            cleanup_plopt_job(args)
+            if not should_restart:
+                break
+            else:
+                # decrease memory limit and restart
+                if current_args.plopt_device_memory_limit < 10000:
+                    break
+                current_args.plopt_device_memory_limit -= 1000
+                print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
+                # nuke the result dir
+                shutil.rmtree(exp_logging_dir)
+                kv.barrier()
+                if args.node_rank == 0:
+                    # reset the status
+                    kv.set(spec_basename + "status", "running")
+                kv.barrier()
+        if args.enable_plopt:
+            current_args.plopt_device_memory_limit = initial_memlimit
 
 def _parse_args():
     parser = argparse.ArgumentParser("Experiment runner for T5 and GPT.")
@@ -1222,7 +1365,14 @@ def _parse_args():
     args = parser.parse_args()
 
     # if experiment config exists, load it
-    config_name = (args.experiment_name[:-4] + ".json") if args.experiment_name.endswith("_spp") else (args.experiment_name + ".json")
+    if args.experiment_name.endswith("_spp"):
+        config_name = args.experiment_name[:-4] + ".json"
+    elif args.experiment_name.endswith("_best"):
+        config_name = args.experiment_name[:-5] + ".json"
+        args.run_best_config = os.path.join(BEST_CONFIG_DIR, args.experiment_name[:-5] + ".jsonl")
+        print_fn("Using best config: {}".format(args.run_best_config))
+    else:
+        config_name = args.experiment_name + ".json"
     config_path = os.path.join(EXP_CONFIG_DIR, config_name)
     print_fn(f"Loading experiment config from {config_path}")
     if os.path.exists(config_path):
@@ -1267,13 +1417,14 @@ def _parse_args():
     # are going to search through
     training_optional_args = []
     plopt_optional_args = ["plopt_enable_packing"]
-    if args.batch_experiments:
-        assert (
-            args.sequence_length_range is not None
-        ), "Must specify sequence length range when running experiments in batch."
-        assert (
-            args.global_batch_size_range is not None
-        ), "Must specify global batch size range when running experiments in batch."
+    if args.batch_experiments or args.run_best_config:
+        if args.batch_experiments:
+            assert (
+                args.sequence_length_range is not None
+            ), "Must specify sequence length range when running experiments in batch."
+            assert (
+                args.global_batch_size_range is not None
+            ), "Must specify global batch size range when running experiments in batch."
         training_optional_args += ["deepspeed_zero_stage"]
         training_optional_args += [
             "seq_length",
@@ -1322,7 +1473,7 @@ def _parse_args():
     # check args
     args = _check_cluster_args(args)
 
-    if args.batch_experiments:
+    if args.batch_experiments or args.run_best_config:
         # training and logging args are generated for each experiment
         return args, None, False
     else:
@@ -1431,6 +1582,8 @@ def main():
         return
     if args.batch_experiments:
         run_batch_experiments(args)
+    elif args.run_best_config:
+        run_best_config(args)
     else:
         args = _create_deepspeed_config(args, exp_logging_dir)
         # get shell script

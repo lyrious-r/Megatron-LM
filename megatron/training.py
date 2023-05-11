@@ -562,7 +562,7 @@ def train_step(forward_step_func, data_iterator,
             skipped_iter = 1
     else:
         model[0].set_gradient_accumulation_boundary(True)
-        if not model[0].enable_backward_allreduce:
+        if not model[0].enable_backward_allreduce or not optimizer.overlap_comm:
             model[0].allreduce_gradients()
         model[0].step()
         skipped_iter = 0
@@ -756,7 +756,7 @@ def plopt_train_step(data_iterator, forward_step_func,
             skipped_iter = 1
     else:
         model[0].set_gradient_accumulation_boundary(True)
-        if not model[0].enable_backward_allreduce:
+        if not model[0].enable_backward_allreduce or not optimizer.overlap_comm:
             model[0].allreduce_gradients()
         model[0].step()
         skipped_iter = 0
@@ -1453,19 +1453,19 @@ def build_train_valid_test_data_iterators(
     assert dl_type in ['single', 'cyclic', 'ordered']
 
     if train_dataloader is not None:
-        train_data_iterator = iter(train_dataloader) if dl_type == 'single' \
+        train_data_iterator = iter(train_dataloader) if dl_type != 'cyclic' \
                             else iter(cyclic_iter(train_dataloader))
     else:
         train_data_iterator = None
 
     if valid_dataloader is not None:
-        valid_data_iterator = iter(valid_dataloader) if dl_type == 'single' \
+        valid_data_iterator = iter(valid_dataloader) if dl_type != 'cyclic' \
                               else iter(cyclic_iter(valid_dataloader))
     else:
         valid_data_iterator = None
 
     if test_dataloader is not None:
-        test_data_iterator = iter(test_dataloader) if dl_type == 'single' \
+        test_data_iterator = iter(test_dataloader) if dl_type != 'cyclic' \
                              else iter(cyclic_iter(test_dataloader))
     else:
         test_data_iterator = None
