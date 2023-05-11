@@ -6,6 +6,7 @@ parser.add_argument('-r', "--remote", type=str, required=True, help='remote serv
 parser.add_argument('-i', "--input", type=str, required=True, help='input dir')
 parser.add_argument('-o', "--output", type=str, default="./run_scp.sh", help='output dir')
 parser.add_argument('--log', action="store_true", help='True if sending log file')
+parser.add_argument('--rank', type=int, default=1, help="node rank")
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -19,7 +20,7 @@ if __name__ == '__main__':
                 if not os.path.isdir(exp_dir):
                     continue
                 log_fn = "stdout_stderr.log"
-                out_log_fn = "stdout_stderr_1.log"
+                out_log_fn = f"stdout_stderr_{args.rank}.log"
                 log_full_path = os.path.join(exp_dir, log_fn)
                 if os.path.isfile(log_full_path):
                     cmd = 'scp {} {}:{}'.format(log_full_path, remote, os.path.join(exp_dir, out_log_fn))
