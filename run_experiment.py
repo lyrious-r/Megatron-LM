@@ -993,8 +993,8 @@ def read_dynapipe_exp_configs(args):
                 setattr(args, k, v)
             if args.pipeline_parallel_size > 1:
                 args.pp_split_rank = get_pp_split_rank(args.pipeline_parallel_size)
-                args.plopt_device_to_node = get_pp_device_to_node_str(args)
-                args.plopt_layer_to_device = get_layer_to_device(args)
+            args.plopt_device_to_node = get_pp_device_to_node_str(args)
+            args.plopt_layer_to_device = get_layer_to_device(args)
             args.train_iters = 1000000000
             yield args
 
