@@ -53,6 +53,7 @@ with open(args.est_out, 'w') as est_f:
                         if fn.endswith(".txt"):
                             with open(os.path.join(subdir_path, fn), 'r') as log_file:
                                 # it is actually a json file
+                                iteration = int(fn.split(".")[0].split("_")[1][4:])
                                 memory_json = json.load(log_file)
                                 peak_memory = memory_json["peak_allocated_memory"] / 1e6 # convert to MB
                                 act_f.write("{},{},{},{},{},{},{}\n".format(exp_name, spec_name, dr, pr, tr, iteration, peak_memory))
