@@ -1332,7 +1332,8 @@ def run_best_config(args):
                 current_args.plopt_device_memory_limit -= 1000
                 print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
                 # nuke the result dir
-                shutil.rmtree(exp_logging_dir)
+                old_exp_logging_dir = exp_logging_dir + f"_memlimit{current_args.plopt_device_memory_limit+1000}"
+                shutil.move(exp_logging_dir, old_exp_logging_dir)
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
