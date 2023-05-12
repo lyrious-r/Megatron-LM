@@ -9,6 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from string import Template
 from typing import Optional
+import hashlib
 import pickle
 import jsonlines
 import datetime
@@ -37,7 +38,7 @@ class RedisKVStore(object):
         self.node_rank = args.node_rank
         self.is_master = args.node_rank == 0
         self.host = args.master_addr
-        self.port = hash(args.experiment_name) % 65535 + 3000
+        self.port = int(hashlib.sha1(args.experiment_name.encode("utf-8")).hexdigest(), 16) % 62535 + 3000
         self.n_processes = args.nnodes
         self.barrier_cnt = 0
         self.gather_cnt = 0
@@ -45,6 +46,7 @@ class RedisKVStore(object):
             self.server = self._run_redis_server()
         # wait for redis server to start
         t = time.time()
+        print("Connecting to KV Server at {}:{}, {} processes in total.".format(self.host, self.port, self.n_processes))
         while True:
             try:
                 self.client = redis.Redis(host=self.host, port=self.port, db=0)
@@ -69,6 +71,7 @@ class RedisKVStore(object):
 
     def _run_redis_server(self):
         # run a redis server
+        print("Starting Redis Server at {}:{}...".format(self.host, self.port))
         p = subprocess.Popen(
             [
                 "redis-server",
@@ -492,7 +495,7 @@ def _add_plopt_args(parser):
     group.add_argument(
         "--plopt_prefetch_planner_num_workers",
         type=int,
-        default=64,
+        default=32,
         help="Number of workers for preprocessing (per node).",
     )
     group.add_argument(

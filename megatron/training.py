@@ -1013,6 +1013,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
     args = get_args()
     timers = get_timers()
     from plopt.utils.logger import logger
+    from plopt.pipe.data_loader import get_num_iters
 
     # Turn on training mode which enables dropout.
     for model_module in model:
@@ -1065,6 +1066,10 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
         timers('iteration-time').start()
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
+        n_iters = get_num_iters()
+        if n_iters is not None and iteration >= n_iters:
+            # run out of data
+            break
         try:
             loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
                 plopt_train_step(
