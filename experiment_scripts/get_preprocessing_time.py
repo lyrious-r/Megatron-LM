@@ -23,7 +23,7 @@ with open(args.out, 'w') as f:
                 gbs = int(spec_name.split('_')[4][3:])
             spp = "spp" in spec_name
             # read log file to determine if it is a successful run
-            stdout_stderr_fn = "stdout_stderr.txt"
+            stdout_stderr_fn = "stdout_stderr.log"
             if not os.path.isfile(os.path.join(exp_full_path, spec_name, stdout_stderr_fn)):
                 continue
             with open(os.path.join(exp_full_path, spec_name, stdout_stderr_fn), 'r') as log_file:
