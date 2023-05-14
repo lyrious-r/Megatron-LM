@@ -55,11 +55,12 @@ with jsonlines.open(args.output_file, mode='w') as writer:
                 assert os.path.exists(log_file)
                 start_dt = None
                 end_dt = None
+                total_tokens = None
                 per_iter_times = []
                 max_iter = -1
                 with open(log_file, "r") as f:
                     for line in f:
-                        if "> loading indexed mapping from" in line:
+                        if "> loading indexed mapping from" in line and total_tokens is None:
                             enc_mapping_path = line.split(" ")[-3].strip()
                             dec_mapping_path = line.split(" ")[-1].strip()
                             enc_mapping = np.load(enc_mapping_path)
