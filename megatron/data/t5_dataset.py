@@ -97,9 +97,8 @@ def run_pack_samples(
     # last sequence
     if curr_input_seq_len > 0:
         input_samples.append(curr_input_sequence)
-        avg_samples_per_sequence += len(curr_input_sequence)
-    if curr_target_seq_len > 0:
         target_samples.append(curr_target_sequence)
+        avg_samples_per_sequence += len(curr_input_sequence)
     print_rank_0(
         ">>>> Pack samples: {} input sequences, {} target sequences, avg samples per sequence: {}, enc batching eff: {}, dec batching eff: {}".format(
             len(input_samples),
