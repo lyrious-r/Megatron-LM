@@ -71,17 +71,11 @@ with jsonlines.open(args.output_file, mode='w') as writer:
                             # start wall time
                             datetime_pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"
                             dt_string = re.findall(datetime_pattern, line)[0]
-                            # start_time = line.strip().split(" ")[-1].strip()
-                            # print(start_time)
-                            # start_date = line.strip().split(" ")[-2].strip()
-                            print(dt_string)
                             start_dt = datetime.strptime(dt_string, '%Y-%m-%d %H:%M:%S')
                         elif "[after training is done]" in line:
                             # end wall time
                             datetime_pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"
                             dt_string = re.findall(datetime_pattern, line)[0]
-                            # end_time = line.strip().split(" ")[-1].strip()
-                            # end_date = line.strip().split(" ")[-2].strip()
                             end_dt = datetime.strptime(dt_string, '%Y-%m-%d %H:%M:%S')
                         elif "elapsed time per iteration (ms):" in line:
                             elapsed = float(line.split("elapsed time per iteration (ms):")[1].split()[0].strip())
