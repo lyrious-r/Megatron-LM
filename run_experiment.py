@@ -16,6 +16,7 @@ import datetime
 import redis
 
 BEST_CONFIG_DIR = "./experiment_configs/best_configs"
+CONTROLLED_CONFIG_DIR = "./experiment_configs/baseline_controlled_configs"
 EXP_CONFIG_DIR = "./experiment_configs"
 TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_{}.template")
 DEEPSPEED_TEMPLATE_PATH = os.path.join(
@@ -1382,6 +1383,12 @@ def _parse_args():
         config_name = raw_config_name + ".json"
         args.run_best_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
         print_fn("Using best config: {}".format(args.run_best_config))
+    elif args.experiment_name.endswith("_control"):
+        raw_config_name = args.experiment_name[:-8]
+        assert not raw_config_name.endswith("_spp"), "Controled baseline experiment must not be spp"
+        config_name = raw_config_name + ".json"
+        args.run_best_config = os.path.join(CONTROLLED_CONFIG_DIR, raw_config_name + ".jsonl")
+        print_fn("Using controlled config: {}".format(args.run_best_config))
     else:
         config_name = args.experiment_name + ".json"
     config_path = os.path.join(EXP_CONFIG_DIR, config_name)
