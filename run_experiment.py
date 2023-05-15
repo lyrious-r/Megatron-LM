@@ -687,7 +687,7 @@ def grid_search_parallelism(args):
 
 
 def grid_search_ds_stage(args, reduce_configs=False):
-    if args.model_type == "t5" and args.pipeline_parallel_size > 1:
+    if args.model_type == "t5" and args.pipeline_parallel_size > 1 and args.enable_plopt:
         # since we use interleaved schedule for t5, we cannot use DS
         yield (False, 0)
         return
@@ -1503,7 +1503,7 @@ def _parse_args():
 
 def _get_shell_script(args):
     # construct pipeline_args
-    if args.model_type == "t5" and args.pipeline_parallel_size > 1:
+    if args.model_type == "t5" and args.pipeline_parallel_size > 1 and args.enable_plopt:
         pipeline_args = (
             f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
         )
