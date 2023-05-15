@@ -43,7 +43,7 @@ def load(args):
             extra_cuda_cflags=['-O3',
                                '-gencode', 'arch=compute_70,code=sm_70',
                                '--use_fast_math'] + extra_cuda_flags + cc_flag,
-            verbose=(args.rank == 0)
+            verbose=(int(os.environ.get("LOCAL_RANK")) == 0)
         )
 
     # ==============
