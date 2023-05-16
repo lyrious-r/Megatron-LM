@@ -522,34 +522,6 @@ def _add_plopt_args(parser):
         default=False,
         help="Enable packing.",
     )
-    return parser, group
-
-
-def _add_experiment_args(parser):
-    group = parser.add_argument_group(title="Experiment Config")
-    group.add_argument(
-        "--batch_experiments",
-        type=bool,
-        default=False,
-        help="Run experiment items in batch.",
-    )
-    group.add_argument(
-        "--sequence_length_range",
-        type=str,
-        default="512,1024,2048,4096,8192,16384,32768",
-        help="Sequence length range.",
-    )
-    group.add_argument(
-        "--global_batch_size_range",
-        type=str,
-        default="16384,32768,65536,131072",
-        help="Global batch size range.",
-    )
-    group.add_argument(
-        "--run_best_config",
-        type=str,
-        help="Run the experiments specified by the config.",
-    )
     group.add_argument(
         "--plopt_partition_algo",
         type=str,
@@ -579,6 +551,40 @@ def _add_experiment_args(parser):
         type=bool,
         default=False,
         help="Disable scheduler memory limit"
+    )
+    group.add_argument(
+        "--plopt_disable_tsp",
+        type=bool,
+        default=False,
+        help="Disable tsp.",
+    )
+    return parser, group
+
+
+def _add_experiment_args(parser):
+    group = parser.add_argument_group(title="Experiment Config")
+    group.add_argument(
+        "--batch_experiments",
+        type=bool,
+        default=False,
+        help="Run experiment items in batch.",
+    )
+    group.add_argument(
+        "--sequence_length_range",
+        type=str,
+        default="512,1024,2048,4096,8192,16384,32768",
+        help="Sequence length range.",
+    )
+    group.add_argument(
+        "--global_batch_size_range",
+        type=str,
+        default="16384,32768,65536,131072",
+        help="Global batch size range.",
+    )
+    group.add_argument(
+        "--run_best_config",
+        type=str,
+        help="Run the experiments specified by the config.",
     )
     return parser, group
 
@@ -1027,6 +1033,8 @@ def get_exp_spec_name(args):
         exp_spec_name += "_noperm"
     if args.plopt_disable_scheduler_memory_limit:
         exp_spec_name += "_noschmemlim"
+    if args.plopt_disable_tsp:
+        exp_spec_name += "_notsp"
     return exp_spec_name
 
 
@@ -1620,6 +1628,8 @@ def _get_shell_script(args):
             plopt_args.append("--plopt-disable-mb-permutation")
         if args.plopt_disable_scheduler_memory_limit:
             plopt_args.append("--plopt-disable-scheduler-memory-limit")
+        if args.plopt_disable_tsp:
+            plopt_args.append("--plopt-disable-tsp")
         if args.model_type == "gpt":
             plopt_args.append("--plopt-seqlen-offset 1")
         if args.plopt_enable_packing:
