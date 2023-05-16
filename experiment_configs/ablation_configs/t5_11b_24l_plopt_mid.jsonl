@@ -1,0 +1,1 @@
+{"encoder_seq_length": 2048, "decoder_seq_length": 2048, "seq_length": 2048, "tokens_per_global_batch": 65536, "tensor_parallel_size": 1, "pipeline_parallel_size": 8, "micro_batch_size": 1, "recompute_level": "none", "enable_deepspeed": false, "deepspeed_zero_stage": 0, "plopt_enable_packing": false, "plopt_partition_algo": "token_based", "plopt_token_based_partition_mbs": 1536}
