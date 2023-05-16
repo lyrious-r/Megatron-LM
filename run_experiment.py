@@ -1034,8 +1034,11 @@ def read_dynapipe_exp_configs(args):
     config_path = args.run_best_config
     with jsonlines.open(config_path, "r") as reader:
         for obj in reader:
+            saved_states = {}
             for k, v in obj.items():
                 if k != "plopt_enable_packing":
+                    if hasattr(args, k):
+                        saved_states[k] = getattr(args, k)
                     setattr(args, k, v)
             if args.pipeline_parallel_size > 1:
                 args.pp_split_rank = get_pp_split_rank(args.pipeline_parallel_size)
@@ -1043,6 +1046,9 @@ def read_dynapipe_exp_configs(args):
             args.plopt_layer_to_device = get_layer_to_device(args)
             args.train_iters = 1000000000
             yield args
+            # restore args
+            for k, v in saved_states.items():
+                setattr(args, k, v)
 
 def pgrep():
     out = os.popen("pgrep redis").read().strip()
