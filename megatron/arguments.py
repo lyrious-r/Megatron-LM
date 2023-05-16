@@ -1241,6 +1241,12 @@ def _add_plopt_args(parser):
                         help='Microbatch partition algorithm to use in plopt.')
     group.add_argument('--plopt-token-based-partition-mbs', type=int, default=1024,
                         help='Number of tokens per microbatch to use for token based partitioning.')
+    group.add_argument('--plopt-schedule-method', type=str, default="dynamic",
+                        help="Schedule method to use in plopt.")
+    group.add_argument('--plopt-disable-mb-permutation', action='store_true',
+                        help='Disable microbatch permutation in plopt.')
+    group.add_argument('--plopt-disable-scheduler-memory-limit', action='store_true',
+                        help='Disable scheduler memory limit in plopt.')
     group.add_argument('--plopt-per-mb-mem-fraction', type=float,
                        default=-1.0, help='Fraction of memory limit to use per '
                         'micro-batch during DP. Default is -1.0, which means '

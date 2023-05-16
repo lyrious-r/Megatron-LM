@@ -562,6 +562,24 @@ def _add_experiment_args(parser):
         default=1024,
         help="Microbatch size for token-based partition.",
     )
+    group.add_argument(
+        "--plopt_schedule_method",
+        type=str,
+        default="dynamic",
+        help="Schedule method to use.",
+    )
+    group.add_argument(
+        "--plopt_disable_mb_permutation",
+        type=bool,
+        default=False,
+        help="Disable microbatch permutation.",
+    )
+    group.add_argument(
+        "--plopt_disable_scheduler_memory_limit",
+        type=bool,
+        default=False,
+        help="Disable scheduler memory limit"
+    )
     return parser, group
 
 
@@ -1003,6 +1021,12 @@ def get_exp_spec_name(args):
         exp_spec_name += "_{}".format(args.plopt_partition_algo)
         assert args.plopt_token_based_partition_mbs is not None
         exp_spec_name += "_{}".format(args.plopt_token_based_partition_mbs)
+    if args.plopt_schedule_method != "dynamic":
+        exp_spec_name += "_sch_{}".format(args.plopt_schedule_method)
+    if args.plopt_disable_mb_permutation:
+        exp_spec_name += "_noperm"
+    if args.plopt_disable_scheduler_memory_limit:
+        exp_spec_name += "_noschmemlim"
     return exp_spec_name
 
 
@@ -1590,7 +1614,12 @@ def _get_shell_script(args):
             "--plopt-custom-allocator",
             f"--plopt-partition-algo {args.plopt_partition_algo}",
             f"--plopt-token-based-partition-mbs {args.plopt_token_based_partition_mbs}",
+            f"--plopt-schedule-method {args.plopt_schedule_method}",
         ]
+        if args.plopt_disable_mb_permutation:
+            plopt_args.append("--plopt-disable-mb-permutation")
+        if args.plopt_disable_scheduler_memory_limit:
+            plopt_args.append("--plopt-disable-scheduler-memory-limit")
         if args.model_type == "gpt":
             plopt_args.append("--plopt-seqlen-offset 1")
         if args.plopt_enable_packing:
