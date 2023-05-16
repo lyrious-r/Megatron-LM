@@ -16,6 +16,7 @@ import datetime
 import redis
 
 BEST_CONFIG_DIR = "./experiment_configs/best_configs"
+ABLATION_CONFIG_DIR = "./experiment_configs/ablation_configs"
 CONTROLLED_CONFIG_DIR = "./experiment_configs/baseline_controlled_configs"
 EXP_CONFIG_DIR = "./experiment_configs"
 TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_{}.template")
@@ -549,6 +550,18 @@ def _add_experiment_args(parser):
         type=str,
         help="Run the experiments specified by the config.",
     )
+    group.add_argument(
+        "--plopt_partition_algo",
+        type=str,
+        default="dp",
+        help="Microbatch partition algorithm to use.",
+    )
+    group.add_argument(
+        "--plopt_token_based_partition_mbs",
+        type=int,
+        default=1024,
+        help="Microbatch size for token-based partition.",
+    )
     return parser, group
 
 
@@ -986,6 +999,10 @@ def get_exp_spec_name(args):
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
     if args.enable_plopt and args.plopt_enable_packing:
         exp_spec_name += "_spp" # for seqlen preserving packing
+    if args.plopt_partition_algo != "dp":
+        exp_spec_name += "_{}".format(args.plopt_partition_algo)
+        assert args.plopt_token_based_partition_mbs is not None
+        exp_spec_name += "_{}".format(args.plopt_token_based_partition_mbs)
     return exp_spec_name
 
 
@@ -1383,6 +1400,13 @@ def _parse_args():
         config_name = raw_config_name + ".json"
         args.run_best_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
         print_fn("Using best config: {}".format(args.run_best_config))
+    elif args.experiment_name.endswith("_abl"):
+        raw_config_name = args.experiment_name[:-4]
+        if raw_config_name.endswith("_spp"):
+            raise ValueError("Ablation experiment should not use spp")
+        config_name = raw_config_name + ".json"
+        args.run_best_config = os.path.join(ABLATION_CONFIG_DIR, raw_config_name + ".jsonl")
+        print_fn("Using ablation config: {}".format(args.run_best_config))
     elif args.experiment_name.endswith("_control"):
         raw_config_name = args.experiment_name[:-8]
         assert not raw_config_name.endswith("_spp"), "Controled baseline experiment must not be spp"
@@ -1564,6 +1588,8 @@ def _get_shell_script(args):
             f"--plopt-zero-stage {args.deepspeed_zero_stage}",
             "--plopt-reserve-all-memory",
             "--plopt-custom-allocator",
+            f"--plopt-partition-algo {args.plopt_partition_algo}",
+            f"--plopt-token-based-partition-mbs {args.plopt_token_based_partition_mbs}",
         ]
         if args.model_type == "gpt":
             plopt_args.append("--plopt-seqlen-offset 1")

@@ -1237,6 +1237,10 @@ def _add_plopt_args(parser):
                              'A list of ints.')
     group.add_argument('--plopt-enable-packing', action='store_true',
                         help='Enable packing in plopt.')
+    group.add_argument('--plopt-partition-algo', type=str, default="dp",
+                        help='Microbatch partition algorithm to use in plopt.')
+    group.add_argument('--plopt-token-based-partition-mbs', type=int, default=1024,
+                        help='Number of tokens per microbatch to use for token based partitioning.')
     group.add_argument('--plopt-per-mb-mem-fraction', type=float,
                        default=-1.0, help='Fraction of memory limit to use per '
                         'micro-batch during DP. Default is -1.0, which means '
