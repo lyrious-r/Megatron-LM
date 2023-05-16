@@ -558,6 +558,11 @@ def _add_plopt_args(parser):
         default=False,
         help="Disable tsp.",
     )
+    group.add_argument(
+        "--plopt_limit_rc_type",
+        type=str,
+        help="Limit rc type.",
+    )
     return parser, group
 
 
@@ -1035,6 +1040,8 @@ def get_exp_spec_name(args):
         exp_spec_name += "_noschmemlim"
     if args.plopt_disable_tsp:
         exp_spec_name += "_notsp"
+    if args.plopt_limit_rc_type:
+        exp_spec_name += "_limitrc_{}".format(args.plopt_limit_rc_type)
     return exp_spec_name
 
 
@@ -1496,7 +1503,7 @@ def _parse_args():
     # if running experiment in batch, don't check training args that we
     # are going to search through
     training_optional_args = []
-    plopt_optional_args = ["plopt_enable_packing"]
+    plopt_optional_args = ["plopt_enable_packing", "plopt_limit_rc_type"]
     if args.batch_experiments or args.run_best_config:
         if args.batch_experiments:
             assert (
@@ -1640,6 +1647,10 @@ def _get_shell_script(args):
             plopt_args.append("--plopt-seqlen-offset 1")
         if args.plopt_enable_packing:
             plopt_args.append("--plopt-enable-packing")
+        if args.plopt_limit_rc_type:
+            plopt_args.append(
+                f"--plopt-limit-rc-type {args.plopt_limit_rc_type}"
+            )
         plopt_args = " ".join(plopt_args)
     # construct deepspeed args
     if not args.enable_deepspeed:
