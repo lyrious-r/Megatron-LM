@@ -1241,6 +1241,8 @@ def _add_plopt_args(parser):
                         help='Microbatch partition algorithm to use in plopt.')
     group.add_argument('--plopt-token-based-partition-mbs', type=int, default=1024,
                         help='Number of tokens per microbatch to use for token based partitioning.')
+    group.add_argument('--plopt-disable-tsp', action="store_true",
+                        help='Disable TSP in plopt.')
     group.add_argument('--plopt-schedule-method', type=str, default="dynamic",
                         help="Schedule method to use in plopt.")
     group.add_argument('--plopt-disable-mb-permutation', action='store_true',
