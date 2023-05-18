@@ -3,5 +3,5 @@
     "plopt_cost_model": "./cost_models/gpt_175b_cm.pkl",
     "plopt_device_memory_limit": 36000,
     "plopt_prefetch_planner_num_workers": 64,
-    "train_iters": 100
+    "train_iters": 40
 }
