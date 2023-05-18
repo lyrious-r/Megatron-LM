@@ -1188,8 +1188,9 @@ def run_batch_experiments(args):
                 with open(current_args.stdout_stderr_log, "r") as f:
                     current_content = f.read()
                 if ("Failed to generate microbatches." in current_content or 
-                    "No feasible schedule" in current_content or 
-                    "OutOfMemoryError" in current_content or 
+                    "No feasible schedule" in current_content or
+                    "AssertionError" in current_content or
+                    "OutOfMemoryError" in current_content or
                     "RuntimeError" in current_content or 
                     "CUDA out of memory" in current_content):
                     # error
@@ -1338,8 +1339,9 @@ def run_best_config(args):
                     current_content = f.read()
                 if ("Failed to generate microbatches." in current_content or 
                     "No feasible schedule" in current_content or 
-                    "OutOfMemoryError" in current_content or 
-                    "RuntimeError" in current_content or 
+                    "OutOfMemoryError" in current_content or
+                    "AssertionError" in current_content or
+                    "RuntimeError" in current_content or
                     "CUDA out of memory" in current_content):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
