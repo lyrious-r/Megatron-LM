@@ -1198,7 +1198,7 @@ def run_batch_experiments(args):
                     if args.enable_plopt and (
                         "OutOfMemoryError" in current_content or
                         "CUDA out of memory" in current_content
-                    ):
+                    ) and "Running iteration" in current_content:
                         should_restart = True
                 elif current_content != prev_content:
                     # progress
