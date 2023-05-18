@@ -1,6 +1,13 @@
 
 #!/bin/bash
 
+# required evs for EFA
+export FI_PROVIDER="efa"
+export FI_EFA_USE_DEVICE_RDMA=1
+export RDMAV_FORK_SAFE=1
+export NCCL_PXN_DISABLE=0
+export LD_LIBRARY_PATH=/opt/nccl/build/lib:/usr/local/cuda/lib64:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/opt/aws-ofi-nccl/lib:$LD_LIBRARY_PATH
+
 # required envs for plopt
 export PLOPT_KV_HOST=${plopt_kv_host}
 export PLOPT_KV_PORT=${plopt_kv_port}
@@ -52,7 +59,7 @@ python -m torch.distributed.launch $$DISTRIBUTED_ARGS \
        --eval-iters 5 \
        --fp16  \
        --vocab-extra-ids 100 \
-       --num-workers 2 \
+       --num-workers 0 \
        --dataloader-type ordered \
        ${pipeline_args} ${recompute_args} ${batching_args} ${plopt_args} ${deepspeed_args} \
        2>&1 | tee ${stdout_stderr_log}

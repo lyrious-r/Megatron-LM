@@ -1230,7 +1230,7 @@ def _add_plopt_args(parser):
                         help='Inter-node bandwidth in Gbps.')
     group.add_argument('--plopt-intra-node-lat', type=int, default=0,
                         help='Intra-node latency in us.')
-    group.add_argument('--plopt-inter-node-lat', type=int, default=0,
+    group.add_argument('--plopt-inter-node-lat', type=int, default=4000,
                         help='Inter-node latency in us.')
     group.add_argument('--plopt-layer-to-device', type=str,
                         help='Mapping between layer ranks to devices.'

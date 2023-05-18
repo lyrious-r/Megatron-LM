@@ -729,10 +729,6 @@ def grid_search_parallelism(args):
 
 
 def grid_search_ds_stage(args, reduce_configs=False):
-    if args.model_type == "t5" and args.pipeline_parallel_size > 1 and args.enable_plopt:
-        # since we use interleaved schedule for t5, we cannot use DS
-        yield (False, 0)
-        return
     if args.pipeline_parallel_size > 1 or args.enable_plopt:
         # we can only use zero 1 with pipeline parallelism or with plopt
         stage_candidates = [1, 0]
@@ -803,19 +799,17 @@ def get_layer_to_device(args):
         )
     pp_size = args.pipeline_parallel_size
     if args.model_type == "t5":
-        # we use interleaved schedule for t5 to balance encoder and decoders
-        # for simplicity here we use a fixed virtual pipeline parallel size 2
         assert (
-            args.encoder_num_layers % pp_size == 0
+            args.encoder_num_layers % (pp_size // 2) == 0
         ), "Number of layers must be divisible by pipeline parallel size."
-        n_encoder_layers_per_device = args.encoder_num_layers // pp_size
-        n_decoder_layers_per_device = args.decoder_num_layers // pp_size
+        n_encoder_layers_per_device = args.encoder_num_layers // (pp_size // 2)
+        n_decoder_layers_per_device = args.decoder_num_layers // (pp_size // 2)
+        assert (
+            n_encoder_layers_per_device == n_decoder_layers_per_device
+        )
         layer_to_device = []
         for i in range(pp_size):
             for _ in range(n_encoder_layers_per_device):
-                layer_to_device.append(f"{i}")
-        for i in range(pp_size):
-            for _ in range(n_decoder_layers_per_device):
                 layer_to_device.append(f"{i}")
     else:
         # we use sequential schedule for gpt
@@ -849,6 +843,7 @@ class ExperimentConfig:
     rc: str = "none"
     ds_level: int = 0
     spp: bool = False
+    plopt_memory_limit: int = 0
     status: str = "unknown"
 
     def speed_dominates(self, other):
@@ -893,6 +888,8 @@ class ExperimentConfig:
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
             or self.spp != other.spp
+            or self.plopt_memory_limit != 36000
+            or other.plopt_memory_limit != 36000
         ):
             return False
         # dominance happens if sequence length is higher, mbs is higher,
@@ -949,6 +946,8 @@ class ExperimentConfig:
                 config.ds_level = int(item[4:])
             elif item.startswith("spp"):
                 config.spp = True
+            elif item.startswith("memlimit"):
+                config.plopt_memory_limit = int(item[8:])
         # test status
         config.status = ExperimentConfig.parse_experiment_status(exp_dir)
         return config
@@ -1028,6 +1027,8 @@ def get_exp_spec_name(args):
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
     if args.enable_plopt and args.plopt_enable_packing:
         exp_spec_name += "_spp" # for seqlen preserving packing
+    if args.enable_plopt:
+        exp_spec_name += "_memlimit{}".format(args.plopt_device_memory_limit)
     if args.plopt_partition_algo != "dp":
         exp_spec_name += "_{}".format(args.plopt_partition_algo)
         assert args.plopt_token_based_partition_mbs is not None
@@ -1194,6 +1195,11 @@ def run_batch_experiments(args):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
+                    if args.enable_plopt and (
+                        "OutOfMemoryError" in current_content or
+                        "CUDA out of memory" in current_content
+                    ):
+                        should_restart = True
                 elif current_content != prev_content:
                     # progress
                     prev_content = current_content
@@ -1247,9 +1253,6 @@ def run_batch_experiments(args):
                     break
                 current_args.plopt_device_memory_limit -= 1000
                 print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
-                # nuke the result dir
-                old_exp_logging_dir = exp_logging_dir + f"_memlimit{current_args.plopt_device_memory_limit+1000}"
-                shutil.move(exp_logging_dir, old_exp_logging_dir)
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
@@ -1341,6 +1344,11 @@ def run_best_config(args):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
+                    if args.enable_plopt and (
+                        "OutOfMemoryError" in current_content or
+                        "CUDA out of memory" in current_content
+                    ):
+                        should_restart = True
                 elif current_content != prev_content:
                     # progress
                     prev_content = current_content
@@ -1394,9 +1402,6 @@ def run_best_config(args):
                     break
                 current_args.plopt_device_memory_limit -= 1000
                 print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
-                # nuke the result dir
-                old_exp_logging_dir = exp_logging_dir + f"_memlimit{current_args.plopt_device_memory_limit+1000}"
-                shutil.move(exp_logging_dir, old_exp_logging_dir)
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
@@ -1576,17 +1581,16 @@ def _get_shell_script(args):
         pipeline_args = (
             f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
         )
-        if args.enable_plopt:
-            # interleaved schedule
-            n_encoder_layers_per_device = args.encoder_num_layers // args.pipeline_parallel_size
-            n_decoder_layers_per_device = args.decoder_num_layers // args.pipeline_parallel_size
-            assert n_encoder_layers_per_device == n_decoder_layers_per_device, (
-                "Different number of layers per device for encoder and decoder "
-                "is not supported."
-            )
-            pipeline_args += (
-                f" --num-layers-per-virtual-pipeline-stage {n_encoder_layers_per_device}"
-            )
+        # if args.enable_plopt:
+        #     n_encoder_layers_per_device = args.encoder_num_layers // (args.pipeline_parallel_size // 2)
+        #     n_decoder_layers_per_device = args.decoder_num_layers // (args.pipeline_parallel_size // 2)
+        #     assert n_encoder_layers_per_device == n_decoder_layers_per_device, (
+        #         "Different number of layers per device for encoder and decoder "
+        #         "is not supported."
+        #     )
+        #     pipeline_args += (
+        #         f" --num-layers-per-virtual-pipeline-stage {n_encoder_layers_per_device}"
+        #     )
     else:
         pipeline_args = ""
     # construct recompute args
