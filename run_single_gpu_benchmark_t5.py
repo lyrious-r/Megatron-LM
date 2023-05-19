@@ -24,7 +24,7 @@ CUDA_VISIBLE_DEVICES={} python3 -m torch.distributed.launch {} \
        --decoder-seq-length {} \
        --micro-batch-size {} \
        --global-batch-size 4096 \
-       --max-position-embeddings 8192 \
+       --max-position-embeddings {} \
        --no-async-tensor-model-parallel-allreduce \
        --train-iters {} \
        --train-epochs 1 \
@@ -217,6 +217,7 @@ def run_benchmark(
         enc_seqlen,
         dec_seqlen,
         microbatch_size,
+        max(enc_seqlen, dec_seqlen),
         benchmark_iters,
         output_dir,
     )

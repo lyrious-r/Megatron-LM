@@ -73,11 +73,15 @@ def _profile_func(
                 if not should_skip:
                     oom = True
                     for n_layers in [3, 2, 1]:
+                        print(f"Running benchmark with {n_layers} layers.")
                         retcode = run_benchmark(
                             tp_size,
                             seqlen,
                             mbs,
                             n_layers,
+                            hidden_size=4096,
+                            n_attn_heads=32,
+                            ffn_hidden_size=16384,
                             output_dir=out_dir,
                             devices=devices,
                             recompute_type=recompute_type,
@@ -114,10 +118,6 @@ if __name__ == "__main__":
         4096,
         6144,
         8192,
-        12288,
-        16384,
-        24576,
-        32768,
     ]
     candidate_recompute_type = ["None", "Selective", "Full"]
 
