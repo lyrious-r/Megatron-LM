@@ -1192,14 +1192,15 @@ def run_batch_experiments(args):
                     "AssertionError" in current_content or
                     "OutOfMemoryError" in current_content or
                     "RuntimeError" in current_content or 
-                    "CUDA out of memory" in current_content):
+                    "out of memory" in current_content):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
                     if args.enable_plopt and (
                         "OutOfMemoryError" in current_content or
-                        "CUDA out of memory" in current_content
+                        "out of memory" in current_content
                     ) and "Running iteration" in current_content:
+                        print("Setting status to restart for spec {}.".format(spec_basename))
                         should_restart = True
                 elif current_content != prev_content:
                     # progress
@@ -1218,14 +1219,20 @@ def run_batch_experiments(args):
                             should_restart = True
                 if should_abort and should_restart:
                     print_fn("Setting status to restart for spec {}.".format(spec_basename))
-                    kv.set(spec_basename + "status", "restart")
+                    kv.set(spec_basename + f"status_{args.node_rank}", "restart")
                 elif should_abort:
                     print_fn("Setting status to abort for spec {}.".format(spec_basename))
-                    kv.set(spec_basename + "status", "abort")
+                    kv.set(spec_basename + f"status_{args.node_rank}", "abort")
                 # get the most updated status from all nodes
-                current_status = kv.get(spec_basename + "status")
-                if current_status is not None:
-                    current_status = current_status.decode()
+                current_status = None
+                for i in range(args.nnodes):
+                    node_status = kv.get(spec_basename + f"status_{i}")
+                    if node_status is not None:
+                        node_status = node_status.decode()
+                    if current_status is None:
+                        current_status = node_status
+                    elif current_status == "abort" and node_status == "restart":
+                        current_status = "restart"
                 should_abort = current_status in ["abort", "restart"]
                 should_restart = current_status == "restart"
                 if should_abort:
@@ -1241,9 +1248,16 @@ def run_batch_experiments(args):
                 time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
             kv.barrier()
             # check restart status again incase some nodes exit early
-            current_status = kv.get(spec_basename + "status")
-            if current_status is not None:
-                current_status = current_status.decode()
+            current_status = None
+            for i in range(args.nnodes):
+                node_status = kv.get(spec_basename + f"status_{i}")
+                if node_status is not None:
+                    node_status = node_status.decode()
+                if current_status is None:
+                    current_status = node_status
+                elif current_status == "abort" and node_status == "restart":
+                    current_status = "restart"
+            should_abort = current_status in ["abort", "restart"]
             should_restart = current_status == "restart"
             cleanup_plopt_job(args)
             if not should_restart:
@@ -1342,13 +1356,13 @@ def run_best_config(args):
                     "OutOfMemoryError" in current_content or
                     "AssertionError" in current_content or
                     "RuntimeError" in current_content or
-                    "CUDA out of memory" in current_content):
+                    "out of memory" in current_content):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
                     if args.enable_plopt and (
                         "OutOfMemoryError" in current_content or
-                        "CUDA out of memory" in current_content
+                        "out of memory" in current_content
                     ) and "Running iteration" in current_content:
                         should_restart = True
                 elif current_content != prev_content:
@@ -1368,14 +1382,20 @@ def run_best_config(args):
                             should_restart = True
                 if should_abort and should_restart:
                     print_fn("Setting status to restart for spec {}.".format(spec_basename))
-                    kv.set(spec_basename + "status", "restart")
+                    kv.set(spec_basename + f"status_{args.node_rank}", "restart")
                 elif should_abort:
                     print_fn("Setting status to abort for spec {}.".format(spec_basename))
-                    kv.set(spec_basename + "status", "abort")
+                    kv.set(spec_basename + f"status_{args.node_rank}", "abort")
                 # get the most updated status from all nodes
-                current_status = kv.get(spec_basename + "status")
-                if current_status is not None:
-                    current_status = current_status.decode()
+                current_status = None
+                for i in range(args.nnodes):
+                    node_status = kv.get(spec_basename + f"status_{i}")
+                    if node_status is not None:
+                        node_status = node_status.decode()
+                    if current_status is None:
+                        current_status = node_status
+                    elif current_status == "abort" and node_status == "restart":
+                        current_status = "restart"
                 should_abort = current_status in ["abort", "restart"]
                 should_restart = current_status == "restart"
                 if should_abort:
