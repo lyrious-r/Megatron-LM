@@ -84,6 +84,16 @@ with jsonlines.open(args.output_file, "w") as writer:
             continue
         for spec_name in os.listdir(os.path.join(args.exp_dir, exp_name)):
             spec_path = os.path.join(args.exp_dir, exp_name, spec_name)
+            log_file = os.path.join(spec_path, "stdout_stderr.log")
+            with open(log_file, "r") as f:
+                contents = f.read()
+                if ("after training is done" in contents or 
+                    "Taking poison pill..." in contents or 
+                    "Training finished successfully." in contents):
+                    # this experiment finished successfully
+                    pass
+                else:
+                    continue
             if "plopt" in exp_name:
                 # read from plopt log
                 per_iter_mb_shapes = []
