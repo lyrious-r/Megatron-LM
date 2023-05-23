@@ -96,8 +96,8 @@ with jsonlines.open(args.output_file, "w") as writer:
                     continue
             if "plopt" in exp_name:
                 # read from plopt log
-                per_iter_mb_shapes = []
-                per_iter_seqlens = []
+                per_iter_mb_shapes = {}
+                per_iter_seqlens = {}
                 seqlens_prefix = os.path.join(spec_path, "plopt_ep_stats", "orig_seq_lens")
                 if "t5" in exp_name:
                     seqlen = int(spec_name.split("_")[3][5:])
@@ -107,25 +107,24 @@ with jsonlines.open(args.output_file, "w") as writer:
                     continue
                 fns = sorted(os.listdir(seqlens_prefix), key=lambda x: int(x.split(".")[0].split("_")[1]))
                 for fn in fns:
+                    iteration = int(fn.split(".")[0].rsplit("_", 1)[1])
                     with open(os.path.join(seqlens_prefix, fn), "rb") as f:
                         input_seqlens, target_seqlens = pickle.load(f)
-                    per_iter_seqlens.append((input_seqlens, target_seqlens))
+                    per_iter_seqlens[iteration] = (input_seqlens, target_seqlens)
                 mb_shapes_prefix = os.path.join(spec_path, "plopt_ep_stats", "per_iter_mb_shapes")
                 fns = sorted(os.listdir(mb_shapes_prefix), key=lambda x: int(x.split(".")[0].split("_")[1]))
                 for fn in fns:
                     iteration = int(fn.split(".")[0].split("_")[1])
-                    while len(per_iter_mb_shapes) <= iteration:
-                        per_iter_mb_shapes.append([])
                     with open(os.path.join(mb_shapes_prefix, fn), "rb") as f:
                         mb_shapes = pickle.load(f)
-                    per_iter_mb_shapes[iteration] += mb_shapes
+                    per_iter_mb_shapes[iteration] = mb_shapes
                 # compute efficiency
                 n_iters = min(len(per_iter_mb_shapes), len(per_iter_seqlens))
                 enc_tokens = 0
                 enc_padded_tokens = 0
                 dec_tokens = 0
                 dec_padded_tokens = 0
-                for i in range(n_iters):
+                for i in per_iter_mb_shapes.keys():
                     truncated_enc_seqlens = np.minimum(per_iter_seqlens[i][0], seqlen)
                     truncated_dec_seqlens = np.minimum(per_iter_seqlens[i][1], seqlen)
                     all_enc_tokens = truncated_enc_seqlens.sum()
