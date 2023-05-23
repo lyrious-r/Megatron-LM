@@ -10,7 +10,7 @@ args = parser.parse_args()
 with open(args.out, 'w') as f:
     for exp_name in os.listdir(args.exp_dir):
         exp_full_path = os.path.join(args.exp_dir, exp_name)
-        if "plopt" not in exp_name or not os.path.isdir(exp_full_path):
+        if "bug" in exp_name or "abl" in exp_name or "plopt" not in exp_name or not os.path.isdir(exp_full_path):
             continue
         for spec_name in os.listdir(exp_full_path):
             if "t5" in exp_name:
