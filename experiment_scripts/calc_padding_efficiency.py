@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 import jsonlines
 import os
+from collections import defaultdict
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--exp_dir', type=str, default="./experiments")
@@ -96,7 +97,7 @@ with jsonlines.open(args.output_file, "w") as writer:
                     continue
             if "plopt" in exp_name:
                 # read from plopt log
-                per_iter_mb_shapes = {}
+                per_iter_mb_shapes = defaultdict(list)
                 per_iter_seqlens = {}
                 seqlens_prefix = os.path.join(spec_path, "plopt_ep_stats", "orig_seq_lens")
                 if "t5" in exp_name:
@@ -117,7 +118,7 @@ with jsonlines.open(args.output_file, "w") as writer:
                     iteration = int(fn.split(".")[0].split("_")[1])
                     with open(os.path.join(mb_shapes_prefix, fn), "rb") as f:
                         mb_shapes = pickle.load(f)
-                    per_iter_mb_shapes[iteration] = mb_shapes
+                    per_iter_mb_shapes[iteration] += mb_shapes
                 # compute efficiency
                 n_iters = min(len(per_iter_mb_shapes), len(per_iter_seqlens))
                 enc_tokens = 0
