@@ -44,7 +44,7 @@ def find_last_datetime_in_file(filename):
 # 4. Number of iterations executed
 with jsonlines.open(args.output_file, mode='w') as writer:
     for exp_name in os.listdir(args.exp_dir):
-        if exp_name.endswith("best") or exp_name.endswith("control"):
+        if not (exp_name.endswith("bug") or exp_name.endswith("control") or exp_name.endswith("best")) and os.path.isdir(os.path.join(args.exp_dir, exp_name)):
             exp_full_path = os.path.join(args.exp_dir, exp_name)
             for spec_name in os.listdir(exp_full_path):
                 log_file = os.path.join(exp_full_path, spec_name, "stdout_stderr.log")
@@ -58,6 +58,15 @@ with jsonlines.open(args.output_file, mode='w') as writer:
                 total_tokens = None
                 per_iter_times = []
                 max_iter = -1
+                with open(log_file, "r") as f:
+                    contents = f.read()
+                    if ("after training is done" in contents or 
+                        "Taking poison pill..." in contents or 
+                        "Training finished successfully." in contents):
+                        # this experiment finished successfully
+                        pass
+                    else:
+                        continue
                 with open(log_file, "r") as f:
                     for line in f:
                         if "> loading indexed mapping from" in line and total_tokens is None:

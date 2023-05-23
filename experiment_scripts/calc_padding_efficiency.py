@@ -78,7 +78,9 @@ def get_batching_efficiency(max_enc_seqlen, max_dec_seqlen, dir):
 
 with jsonlines.open(args.output_file, "w") as writer:
     for exp_name in os.listdir(args.exp_dir):
-        if not "best" in exp_name or "control" in exp_name:
+        if "bug" in exp_name or "abl" in exp_name:
+            continue
+        if not os.path.isdir(os.path.join(args.exp_dir, exp_name)):
             continue
         for spec_name in os.listdir(os.path.join(args.exp_dir, exp_name)):
             spec_path = os.path.join(args.exp_dir, exp_name, spec_name)
