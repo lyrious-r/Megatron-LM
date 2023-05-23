@@ -16,7 +16,7 @@ with open(args.est_out, 'w') as est_f:
         act_f.write("exp_name,spec_name,dr,pr,tr,iteration,memory\n")
         for exp_name in tqdm(os.listdir(args.exp_dir), desc="Experiments"):
             exp_full_path = os.path.join(args.exp_dir, exp_name)
-            if "plopt" not in exp_name or not os.path.isdir(exp_full_path):
+            if "plopt" not in exp_name or not os.path.isdir(exp_full_path) or "bug" in exp_name:
                 continue
             for spec_name in tqdm(os.listdir(exp_full_path), desc="Specs", leave=False):
                 # read log file to determine if it is a successful run
