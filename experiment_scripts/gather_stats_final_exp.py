@@ -44,7 +44,7 @@ def find_last_datetime_in_file(filename):
 # 4. Number of iterations executed
 with jsonlines.open(args.output_file, mode='w') as writer:
     for exp_name in os.listdir(args.exp_dir):
-        if not (exp_name.endswith("bug") or exp_name.endswith("control") or exp_name.endswith("best")) and os.path.isdir(os.path.join(args.exp_dir, exp_name)):
+        if not ("bug" in exp_name or exp_name.endswith("abl")) and os.path.isdir(os.path.join(args.exp_dir, exp_name)):
             exp_full_path = os.path.join(args.exp_dir, exp_name)
             for spec_name in os.listdir(exp_full_path):
                 log_file = os.path.join(exp_full_path, spec_name, "stdout_stderr.log")
