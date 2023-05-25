@@ -901,6 +901,9 @@ def get_samples_mapping_supervised(
     start_time = time.time()
     samples_mapping = np.load(input_indexmap_filename, allow_pickle=True, mmap_mode='r')
     target_samples_mapping = np.load(target_indexmap_filename, allow_pickle=True, mmap_mode='r')
+
+    samples_mapping = samples_mapping[:100000]
+    target_samples_mapping = target_samples_mapping[:100000]
     print_fn('    loaded indexed files in {:3.3f} seconds'.format(
         time.time() - start_time))
     print_fn('    total number of input samples: {}'.format(

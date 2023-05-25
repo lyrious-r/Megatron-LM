@@ -757,7 +757,7 @@ def grid_search_microbatch_size(dp_size, args):
     if per_gpu_batch_size == 0:
         # cannot run
         return
-    for mbs in [x for x in _get_pow_of_2s_up_to(per_gpu_batch_size, reduced_number=True) if x < 128]:
+    for mbs in [x for x in _get_pow_of_2s_up_to(per_gpu_batch_size) if x < 128]:
         if expected_gbs % mbs == 0:
             yield mbs
 
