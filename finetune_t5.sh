@@ -13,8 +13,8 @@ DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_docu
 TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
-export PLOPT_DEBUG=DEBUG
-export PLOPT_LOGGING_DEBUG_DIR=/root/Megatron-LM/plopt_debug
+export DYNAPIPE_DEBUG=DEBUG
+export DYNAPIPE_LOGGING_DEBUG_DIR=/root/Megatron-LM/dynapipe_debug
 export NCCL_DEBUG=VERSION
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT --use-env"
@@ -60,16 +60,16 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --pipeline-model-parallel-split-rank 2 \
        --dataloader-type ordered \
        --recompute-method uniform \
-       --use-plopt \
-       --plopt-cost-model /root/Megatron-LM/t5_11b_cm.pkl \
-       --plopt-device-to-node 0:0,1:0,2:0,3:0 \
-       --plopt-device-memory-limit 36000 \
-       --plopt-intra-node-bw 4800 \
-       --plopt-inter-node-bw 100 \
-       --plopt-layer-to-device 0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3 \
+       --use-dynapipe \
+       --dynapipe-cost-model /root/Megatron-LM/t5_11b_cm.pkl \
+       --dynapipe-device-to-node 0:0,1:0,2:0,3:0 \
+       --dynapipe-device-memory-limit 36000 \
+       --dynapipe-intra-node-bw 4800 \
+       --dynapipe-inter-node-bw 100 \
+       --dynapipe-layer-to-device 0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3 \
        --dynamic-batchsize \
        --tokens-per-global-batch 65536 \
-       --plopt-prefetch-planner-num-workers 64 \
-       --plopt-reserve-all-memory \
-       --plopt-custom-allocator \
-       2>&1 | tee log_t5_11b_16l_plopt_linear_gbs65536.txt
+       --dynapipe-prefetch-planner-num-workers 64 \
+       --dynapipe-reserve-all-memory \
+       --dynapipe-custom-allocator \
+       2>&1 | tee log_t5_11b_16l_dynapipe_linear_gbs65536.txt

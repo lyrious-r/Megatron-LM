@@ -15,8 +15,8 @@ from megatron.data.t5_dataset import T5SupervisedDataset, T5UnsupervisedDataset
 from typing import Union
 
 
-from plopt.model import PlOptCluster, TransformerModelSpec
-from plopt.pipe.data_loader import JointDataLoader, TrainingSpec
+from dynapipe.model import DynaPipeCluster, TransformerModelSpec
+from dynapipe.pipe.data_loader import DynaPipeDataLoader, TrainingSpec
 
 def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, n_virtual_pp_ranks=1, is_training=False):
     """Buld dataloader given an input dataset."""
@@ -54,26 +54,26 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             dynamic_batchsize=args.dynamic_batchsize,
             tokens_per_global_batch=args.tokens_per_global_batch,
             skip_iters=args.skip_iters,
-            use_plopt=args.use_plopt,
+            use_dynapipe=args.use_dynapipe,
             is_training=is_training,
         )
     else:
         raise Exception('{} dataloader type is not supported.'.format(
                 args.dataloader_type))
 
-    if args.use_plopt and is_training:
+    if args.use_dynapipe and is_training:
         assert isinstance(dataset, T5SupervisedDataset)
         dataset: T5SupervisedDataset
-        cluster_spec = PlOptCluster(
-            args.plopt_device_to_node,
-            [args.plopt_device_memory_limit] * len(args.plopt_device_to_node),
-            args.plopt_intra_node_bw,
-            args.plopt_inter_node_bw,
-            args.plopt_intra_node_lat,
-            args.plopt_inter_node_lat,
+        cluster_spec = DynaPipeCluster(
+            args.dynapipe_device_to_node,
+            [args.dynapipe_device_memory_limit] * len(args.dynapipe_device_to_node),
+            args.dynapipe_intra_node_bw,
+            args.dynapipe_inter_node_bw,
+            args.dynapipe_intra_node_lat,
+            args.dynapipe_inter_node_lat,
         )
-        buffer_size = args.plopt_prefetch_planner_num_workers
-        listener_workers = args.plopt_prefetch_listener_num_workers
+        buffer_size = args.dynapipe_prefetch_planner_num_workers
+        listener_workers = args.dynapipe_prefetch_listener_num_workers
         dp_size = torch.distributed.get_world_size() // \
                     (args.tensor_model_parallel_size * 
                      args.pipeline_model_parallel_size)
@@ -84,7 +84,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             n_encoder_layers = args.encoder_num_layers
             n_decoder_layers = args.decoder_num_layers
         training_spec = TrainingSpec(
-            args.plopt_cost_model,
+            args.dynapipe_cost_model,
             cluster_spec,
             TransformerModelSpec(n_encoder_layers, n_decoder_layers,
                                 args.hidden_size, args.num_attention_heads,
@@ -92,26 +92,26 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
             dp_size,
             args.tensor_model_parallel_size,
             args.pipeline_model_parallel_size,
-            args.plopt_zero_stage,
-            args.plopt_layer_to_device,
-            args.plopt_device_memory_limit,
-            args.plopt_partition_algo,
-            args.plopt_token_based_partition_mbs,
-            schedule_method=args.plopt_schedule_method,
-            disable_mb_permutation=args.plopt_disable_mb_permutation,
-            disable_scheduler_memory_limit=args.plopt_disable_scheduler_memory_limit,
-            enable_packing=args.plopt_enable_packing,
-            per_mb_memory_fraction=args.plopt_per_mb_mem_fraction,
-            round_seqlen_multiple=args.plopt_round_seqlen_multiple,
-            seqlen_offset=args.plopt_seqlen_offset,
-            limit_rc_type=args.plopt_limit_rc_type,
+            args.dynapipe_zero_stage,
+            args.dynapipe_layer_to_device,
+            args.dynapipe_device_memory_limit,
+            args.dynapipe_partition_algo,
+            args.dynapipe_token_based_partition_mbs,
+            schedule_method=args.dynapipe_schedule_method,
+            disable_mb_permutation=args.dynapipe_disable_mb_permutation,
+            disable_scheduler_memory_limit=args.dynapipe_disable_scheduler_memory_limit,
+            enable_packing=args.dynapipe_enable_packing,
+            per_mb_memory_fraction=args.dynapipe_per_mb_mem_fraction,
+            round_seqlen_multiple=args.dynapipe_round_seqlen_multiple,
+            seqlen_offset=args.dynapipe_seqlen_offset,
+            limit_rc_type=args.dynapipe_limit_rc_type,
             model_type="gpt" if dataset.inputs_only else "t5",
         )
         node_rank = torch.distributed.get_rank() // int(os.environ["LOCAL_WORLD_SIZE"])
         node_size = torch.distributed.get_world_size() // int(os.environ["LOCAL_WORLD_SIZE"])
         encoder_key = "text_enc" if not dataset.inputs_only else "text"
         decoder_key = "text_dec" if not dataset.inputs_only else None
-        joint_dataloader = JointDataLoader(training_spec,
+        joint_dataloader = DynaPipeDataLoader(training_spec,
                                         dataset,
                                         dataset.pack_fn,
                                         dataset.constructor_fn,
@@ -133,7 +133,7 @@ def build_pretraining_data_loader(dataset, consumed_samples, virtual_pp_rank=0, 
     # Torch dataloader.
     if isinstance(dataset, T5SupervisedDataset):
         # dynamic microbatching
-        collate_fn = dataset.non_plopt_collate_fn
+        collate_fn = dataset.non_dynapipe_collate_fn
     else:
         collate_fn = None
     return torch.utils.data.DataLoader(
@@ -300,7 +300,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         dynamic_batchsize=False,
         tokens_per_global_batch=None,
         skip_iters=0,
-        use_plopt=False,
+        use_dynapipe=False,
         is_training=True,
     ):
         super().__init__(
@@ -340,7 +340,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
                 )
             self._tokens_per_global_batch = tokens_per_global_batch
         self._is_supervised_dataset = isinstance(dataset, T5SupervisedDataset)
-        self.use_plopt = use_plopt
+        self.use_dynapipe = use_dynapipe
         # handle skip iters
         self.skip_iters = skip_iters
         if self.skip_iters > 0 and is_training:
@@ -371,11 +371,11 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
             # here we count both input and target tokens
             # another option is to count only input tokens
             tokens_if_added = current_batch_tokens + input_seq_len + target_seq_len
-            # if not using plopt, each microbatch should have fixed shape
+            # if not using dynapipe, each microbatch should have fixed shape
             # so the number pf samples in a minibatch should be a multiple of
             # microbatch size
             is_microbatch_boundary = (
-                (idx - start_idx) % self.micro_batch_size == 0 if not self.use_plopt else True
+                (idx - start_idx) % self.micro_batch_size == 0 if not self.use_dynapipe else True
             )
             if (
                 # current batch is not empty
@@ -412,7 +412,7 @@ class MegatronPretrainingOrderedSampler(MegatronPretrainingRandomSampler):
         g = torch.Generator()
         g.manual_seed(epoch)
         if self._dynamic_batchsize:
-            assert self.use_plopt, "Please use precalculated batch size for packed training."
+            assert self.use_dynapipe, "Please use precalculated batch size for packed training."
             start_idx = current_epoch_samples
             while start_idx < self.total_samples:
                 next_batch_end_idx = self._get_next_batch(start_idx, self.total_samples)

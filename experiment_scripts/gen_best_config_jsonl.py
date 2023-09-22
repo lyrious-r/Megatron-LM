@@ -32,7 +32,7 @@ output_json_template = {
     "recompute_level": None,
     "enable_deepspeed": None,
     "deepspeed_zero_stage": None,
-    "plopt_enable_packing": False,
+    "dynapipe_enable_packing": False,
 }
 
 for input_fn in args.input:
@@ -58,5 +58,5 @@ for input_fn in args.input:
                     output_json["enable_deepspeed"] = (best_config["ds_level"] >= 1)
                     output_json["deepspeed_zero_stage"] = best_config["ds_level"]
                     if "spp" in best_config:
-                        output_json["plopt_enable_packing"] = best_config["spp"]
+                        output_json["dynapipe_enable_packing"] = best_config["spp"]
                     writer.write(output_json)

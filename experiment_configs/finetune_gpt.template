@@ -8,15 +8,15 @@ export RDMAV_FORK_SAFE=1
 export NCCL_PXN_DISABLE=0
 export LD_LIBRARY_PATH=/opt/nccl/build/lib:/usr/local/cuda/lib64:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/opt/aws-ofi-nccl/lib:$$LD_LIBRARY_PATH
 
-# required envs for plopt
-export PLOPT_KV_HOST=${plopt_kv_host}
-export PLOPT_KV_PORT=${plopt_kv_port}
-export PLOPT_DEBUG=${plopt_debug_level}
-export PLOPT_LOGGING_DEBUG_DIR=${plopt_debug_logging_dir}
-export PLOPT_DEBUG_DUMP_EP_STATS=${plopt_dump_stats}
-export PLOPT_DEBUG_DUMP_EP_PREFIX=${plopt_debug_dump_ep_prefix}
-export PLOPT_DEBUG_DUMP_MEMORY_STATS=${plopt_dump_stats}
-export PLOPT_DEBUG_DUMP_MEMORY_PREFIX=${plopt_debug_dump_memory_prefix}
+# required envs for dynapipe
+export DYNAPIPE_KV_HOST=${dynapipe_kv_host}
+export DYNAPIPE_KV_PORT=${dynapipe_kv_port}
+export DYNAPIPE_DEBUG=${dynapipe_debug_level}
+export DYNAPIPE_LOGGING_DEBUG_DIR=${dynapipe_debug_logging_dir}
+export DYNAPIPE_DEBUG_DUMP_EP_STATS=${dynapipe_dump_stats}
+export DYNAPIPE_DEBUG_DUMP_EP_PREFIX=${dynapipe_debug_dump_ep_prefix}
+export DYNAPIPE_DEBUG_DUMP_MEMORY_STATS=${dynapipe_dump_stats}
+export DYNAPIPE_DEBUG_DUMP_MEMORY_PREFIX=${dynapipe_debug_dump_memory_prefix}
 
 export NCCL_DEBUG=WARN
 
@@ -60,5 +60,5 @@ python -m torch.distributed.launch $$DISTRIBUTED_ARGS \
        --vocab-extra-ids 100 \
        --num-workers 0 \
        --dataloader-type ordered \
-       ${pipeline_args} ${recompute_args} ${batching_args} ${plopt_args} ${deepspeed_args} \
+       ${pipeline_args} ${recompute_args} ${batching_args} ${dynapipe_args} ${deepspeed_args} \
        2>&1 | tee ${stdout_stderr_log}

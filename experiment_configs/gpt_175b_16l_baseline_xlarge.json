@@ -3,5 +3,5 @@
     "model_config": "./experiment_configs/model_configs/gpt_175b_16l.json",
     "data_config": "./experiment_configs/data_configs/flan_zsopt_gpt.json",
     "training_config": "./experiment_configs/training_configs/baseline.json",
-    "plopt_dump_stats": true
+    "dynapipe_dump_stats": true
 }

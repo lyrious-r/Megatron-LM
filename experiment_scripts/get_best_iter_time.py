@@ -144,17 +144,17 @@ def get_iter_time(fn: str):
     return np.mean(times[2:]) # skip first 20 iteration as warmup
 
 def get_batching_efficiency(max_enc_seqlen, max_dec_seqlen, dir):
-    if "plopt" in dir:
-        # read from plopt log
+    if "dynapipe" in dir:
+        # read from dynapipe log
         per_iter_mb_shapes = []
         per_iter_seqlens = []
-        seqlens_prefix = os.path.join(dir, "plopt_ep_stats", "orig_seq_lens")
+        seqlens_prefix = os.path.join(dir, "dynapipe_ep_stats", "orig_seq_lens")
         fns = sorted(os.listdir(seqlens_prefix), key=lambda x: int(x.split(".")[0].split("_")[1]))
         for fn in fns:
             with open(os.path.join(seqlens_prefix, fn), "rb") as f:
                 input_seqlens, target_seqlens = pickle.load(f)
             per_iter_seqlens.append((input_seqlens, target_seqlens))
-        mb_shapes_prefix = os.path.join(dir, "plopt_ep_stats", "per_iter_mb_shapes")
+        mb_shapes_prefix = os.path.join(dir, "dynapipe_ep_stats", "per_iter_mb_shapes")
         fns = sorted(os.listdir(mb_shapes_prefix), key=lambda x: int(x.split(".")[0].split("_")[1]))
         for fn in fns:
             iteration = int(fn.split(".")[0].split("_")[1])

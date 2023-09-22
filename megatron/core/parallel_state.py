@@ -104,7 +104,7 @@ def initialize_model_parallel(
 
     args = get_args()
     if virtual_pipeline_model_parallel_size is not None:
-        if not pipeline_model_parallel_size > 2 and not args.use_plopt:
+        if not pipeline_model_parallel_size > 2 and not args.use_dynapipe:
             raise RuntimeError("pipeline-model-parallel size should be greater than 2 with "
                                "interleaved schedule")
         global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
@@ -209,11 +209,11 @@ def initialize_model_parallel(
     # we could stick it there
     _set_global_memory_buffer()
 
-    # hijack the plopt logger
-    if args.use_plopt:
-        import plopt
-        logger = plopt.utils.logger.create_logger("Megatron", distributed_rank=torch.distributed.get_rank())
-        plopt.utils.logger.logger = logger
+    # hijack the dynapipe logger
+    if args.use_dynapipe:
+        import dynapipe
+        logger = dynapipe.utils.logger.create_logger("Megatron", distributed_rank=torch.distributed.get_rank())
+        dynapipe.utils.logger.logger = logger
 
 
 def model_parallel_is_initialized():

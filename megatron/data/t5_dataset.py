@@ -410,7 +410,7 @@ class T5SupervisedDataset(torch.utils.data.Dataset):
             self.sentinel_tokens,
         )
 
-    def non_plopt_collate_fn(self, batch):
+    def non_dynapipe_collate_fn(self, batch):
         # pad to max sequence length
         from torch.utils.data import default_collate
         args = get_args()

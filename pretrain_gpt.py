@@ -74,7 +74,7 @@ def loss_func(loss_mask, output_tensor):
     loss_mask = loss_mask.view(-1).float()
     loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
 
-    if not args.use_plopt:
+    if not args.use_dynapipe:
         averaged_losses = average_losses_across_data_parallel_group([loss])
         return loss, {'lm loss': averaged_losses[0]}
     else:

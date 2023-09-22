@@ -10,7 +10,7 @@ args = parser.parse_args()
 with open(args.out, 'w') as f:
     for exp_name in os.listdir(args.exp_dir):
         exp_full_path = os.path.join(args.exp_dir, exp_name)
-        if "bug" in exp_name or "abl" in exp_name or "plopt" not in exp_name or not os.path.isdir(exp_full_path):
+        if "bug" in exp_name or "abl" in exp_name or "dynapipe" not in exp_name or not os.path.isdir(exp_full_path):
             continue
         for spec_name in os.listdir(exp_full_path):
             if "t5" in exp_name:
@@ -29,7 +29,7 @@ with open(args.out, 'w') as f:
             with open(os.path.join(exp_full_path, spec_name, stdout_stderr_fn), 'r') as log_file:
                 if not "Training finished successfully." in log_file.read():
                     continue
-            preprocessing_dir = os.path.join(exp_full_path, spec_name, "plopt_logs", "preprocessing")
+            preprocessing_dir = os.path.join(exp_full_path, spec_name, "dynapipe_logs", "preprocessing")
             if not os.path.isdir(preprocessing_dir):
                 continue
             for fn in os.listdir(preprocessing_dir):

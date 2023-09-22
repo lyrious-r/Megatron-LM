@@ -47,13 +47,13 @@ from megatron.utils import average_losses_across_data_parallel_group
 
 from .pipeline_executor import get_pipeline_executor
 
-from plopt.memory_opt.utils import reserve_full_memory
-from plopt.pipe.instructions import ExecutionPlan
+from dynapipe.memory_opt.utils import reserve_full_memory
+from dynapipe.pipe.instructions import ExecutionPlan
 
-DEBUG_DUMP_MEMORY_STATS = os.getenv("PLOPT_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
-DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('PLOPT_DEBUG_DUMP_MEMORY_PREFIX', None)
+DEBUG_DUMP_MEMORY_STATS = os.getenv("DYNAPIPE_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
+DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('DYNAPIPE_DEBUG_DUMP_MEMORY_PREFIX', None)
 if DEBUG_DUMP_MEMORY_STATS and not DEBUG_DUMP_MEMORY_PREFIX:
-    raise ValueError("PLOPT_DEBUG_DUMP_MEMORY_PREFIX must be set if PLOPT_DEBUG_DUMP_MEMORY_STATS is set")
+    raise ValueError("DYNAPIPE_DEBUG_DUMP_MEMORY_PREFIX must be set if DYNAPIPE_DEBUG_DUMP_MEMORY_STATS is set")
 
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
@@ -119,7 +119,7 @@ def pretrain(train_valid_test_dataset_provider,
     args = get_args()
     timers = get_timers()
 
-    if DEBUG_DUMP_MEMORY_STATS and not args.plopt_custom_allocator:
+    if DEBUG_DUMP_MEMORY_STATS and not args.dynapipe_custom_allocator:
         torch.cuda.memory._record_memory_history(True, trace_alloc_record_context=True, record_context_cpp=True)
 
     # Model, optimizer, and learning rate.
@@ -163,8 +163,8 @@ def pretrain(train_valid_test_dataset_provider,
 
     iteration = 0
     if args.do_train and args.train_iters > 0:
-        if args.use_plopt:
-            iteration = plopt_train(forward_step_func, model, optimizer,
+        if args.use_dynapipe:
+            iteration = dynapipe_train(forward_step_func, model, optimizer,
                                    opt_param_scheduler, train_data_iterator)
         else:
             iteration = train(forward_step_func,
@@ -451,8 +451,8 @@ def setup_model_and_optimizer(model_provider_func,
             mpu=mpu,
             dist_init_required=False
         )
-        if args.use_plopt or mpu.get_pipeline_model_parallel_world_size() > 1:
-            # we manually allreduce gradients when using plopt or during pp
+        if args.use_dynapipe or mpu.get_pipeline_model_parallel_world_size() > 1:
+            # we manually allreduce gradients when using dynapipe or during pp
             model.pipeline_parallelism = True
             model.enable_backward_allreduce = False
         model = [model]
@@ -585,7 +585,7 @@ def train_step(forward_step_func, data_iterator,
     return {}, skipped_iter, grad_norm, num_zeros_in_grad
 
 
-def plopt_train_step(data_iterator, forward_step_func,
+def dynapipe_train_step(data_iterator, forward_step_func,
                      model, optimizer, opt_param_scheduler):
     """Single training step."""
     args = get_args()
@@ -610,8 +610,8 @@ def plopt_train_step(data_iterator, forward_step_func,
         if not os.path.exists(dump_dir):
             os.makedirs(dump_dir)
         torch.cuda.synchronize()
-        if args.plopt_custom_allocator:
-            from plopt.memory_opt.cuda_caching_allocator import get_allocator
+        if args.dynapipe_custom_allocator:
+            from dynapipe.memory_opt.cuda_caching_allocator import get_allocator
             allocator = get_allocator()
             # bug, disable until fixed
             # pickled_snapshot = allocator.get_memory_snapshot()
@@ -648,7 +648,7 @@ def plopt_train_step(data_iterator, forward_step_func,
                 }
                 json.dump(data, f)
         # reset peak
-        if args.plopt_custom_allocator:
+        if args.dynapipe_custom_allocator:
             allocator.reset_peak_stats()
             allocator.reset_accumulated_stats()
         else:
@@ -1009,13 +1009,13 @@ def get_optimizer_state_size(optimizer):
         size += _traverse_dict_or_lists(params_or_state_dicts)
     return size
 
-def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
+def dynapipe_train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator):
     """Train the model function. Removed irrelavant code for testing."""
     args = get_args()
     timers = get_timers()
-    from plopt.utils.logger import logger
-    from plopt.pipe.data_loader import get_num_iters
+    from dynapipe.utils.logger import logger
+    from dynapipe.pipe.data_loader import get_num_iters
 
     # Turn on training mode which enables dropout.
     for model_module in model:
@@ -1030,7 +1030,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
 
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
-    report_memory_flag = True if not args.plopt_custom_allocator else False
+    report_memory_flag = True if not args.dynapipe_custom_allocator else False
     rank = torch.distributed.get_rank()
     pp_rank = mpu.get_pipeline_model_parallel_rank()
     dp_rank = mpu.get_data_parallel_rank()
@@ -1046,7 +1046,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             "debug_dump_memory_stats"
     while iteration < args.train_iters:
         if iteration == 1:
-            if args.plopt_reserve_all_memory:
+            if args.dynapipe_reserve_all_memory:
                 # Reserve all GPU memory upfront.
                 reserved_memory, memory_limit = reserve_full_memory()
                 logger.info("Reserved memory: {:.2f} GB, "
@@ -1061,7 +1061,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             #     print('saving allocated state during OOM')
             #     snapshot = torch.cuda.memory._snapshot()
             #     pickle.dump(snapshot, open(f'oom_snapshot_rank{rank}.pickle', 'wb'))
-            # if not args.plopt_custom_allocator:
+            # if not args.dynapipe_custom_allocator:
             #     torch._C._cuda_attach_out_of_memory_observer(oom_observer)
         if int(os.environ.get('LOCAL_RANK')) == 0:
             logger.info("Running iteration {}...".format(iteration))
@@ -1074,7 +1074,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             break
         try:
             loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
-                plopt_train_step(
+                dynapipe_train_step(
                         train_data_iterator,
                         forward_step_func,
                         model,
@@ -1090,7 +1090,7 @@ def plopt_train(forward_step_func, model, optimizer, opt_param_scheduler,
             logger.info("Emptying cuda cache...")
             torch.cuda.empty_cache()
         if args.profile_with_nsys:
-            from plopt.utils.logger import logger
+            from dynapipe.utils.logger import logger
             if iteration - orig_iteration == args.nsys_profile_warmup:
                 logger.warning("Cuda profiler started.")
                 torch.cuda.cudart().cudaProfilerStart()
@@ -1156,7 +1156,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator, valid_data_iterator,
           process_non_loss_data_func):
     """Train the model function."""
-    from plopt.utils.logger import logger
+    from dynapipe.utils.logger import logger
     args = get_args()
     timers = get_timers()
 
@@ -1192,7 +1192,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        opt_param_scheduler)
         iteration += 1
         if args.profile_with_nsys:
-            from plopt.utils.logger import logger
+            from dynapipe.utils.logger import logger
             if iteration - orig_iteration == args.nsys_profile_warmup:
                 logger.warning("Cuda profiler started.")
                 torch.cuda.cudart().cudaProfilerStart()

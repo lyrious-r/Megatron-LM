@@ -13,7 +13,7 @@ DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_inputs_docu
 TARGETS_DATA_PATH=/root/Megatron-LM/datasets/cleaned_supervised_proportional_targets_document
 CHECKPOINT_PATH=/root/Megatron-LM/checkpoints
 
-export PLOPT_DEBUG=INFO
+export DYNAPIPE_DEBUG=INFO
 
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
 
@@ -59,16 +59,16 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --dataloader-type ordered \
        --num-layers-per-virtual-pipeline-stage 1 \
        --recompute-method uniform \
-       --use-plopt \
-       --plopt-cost-model /root/t5_11b_cm.pkl \
-       --plopt-device-to-node 0:0,1:0,2:0,3:0 \
-       --plopt-device-memory-limit 40000 \
-       --plopt-intra-node-bw 4800 \
-       --plopt-inter-node-bw 100 \
-       --plopt-layer-to-device 0,1,2,3,0,1,2,3 \
+       --use-dynapipe \
+       --dynapipe-cost-model /root/t5_11b_cm.pkl \
+       --dynapipe-device-to-node 0:0,1:0,2:0,3:0 \
+       --dynapipe-device-memory-limit 40000 \
+       --dynapipe-intra-node-bw 4800 \
+       --dynapipe-inter-node-bw 100 \
+       --dynapipe-layer-to-device 0,1,2,3,0,1,2,3 \
        --dynamic-batchsize \
        --tokens-per-global-batch 16384 \
-       --plopt-prefetch-planner-num-workers 128 \
-       --plopt-limit-rc-type none \
+       --dynapipe-prefetch-planner-num-workers 128 \
+       --dynapipe-limit-rc-type none \
        --profile-with-nsys \
-       2>&1 | tee log_t5_plopt_finetune_interleaved.txt
+       2>&1 | tee log_t5_dynapipe_finetune_interleaved.txt

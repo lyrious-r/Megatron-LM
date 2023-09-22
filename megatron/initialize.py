@@ -49,9 +49,9 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
     # tensorboard-writer, and timers.
     set_global_variables(args)
 
-    if args.plopt_custom_allocator:
-        from plopt.memory_opt.cuda_caching_allocator import override_allocator
-        from plopt.memory_opt.host_caching_allocator import apply_monkey_patch
+    if args.dynapipe_custom_allocator:
+        from dynapipe.memory_opt.cuda_caching_allocator import override_allocator
+        from dynapipe.memory_opt.host_caching_allocator import apply_monkey_patch
         override_allocator()
         apply_monkey_patch()
 
@@ -272,7 +272,7 @@ def _warmup_jit_function():
     else:
         dtype = torch.float32
 
-    if args.use_plopt:
+    if args.use_dynapipe:
         # don't use max sequence length for warmup
         orig_seq_length = args.seq_length
         args.seq_length = 512
@@ -312,5 +312,5 @@ def _warmup_jit_function():
             output = bias_dropout_add_fused_train(input, bias, residual, dropout_rate)
     del bias, input, residual, output
     torch.cuda.empty_cache()
-    if args.use_plopt:
+    if args.use_dynapipe:
         args.seq_length = orig_seq_length

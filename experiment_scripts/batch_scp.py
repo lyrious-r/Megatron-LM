@@ -32,7 +32,7 @@ if __name__ == '__main__':
                 exp_dir = os.path.join(input_dir, exp_dir)
                 if not os.path.isdir(exp_dir):
                     continue
-                subdir = "plopt_ep_stats"
+                subdir = "dynapipe_ep_stats"
                 seqlen_dir = "orig_seq_lens"
                 seqlen_full_dir = os.path.join(exp_dir, subdir, seqlen_dir)
                 if os.path.isdir(seqlen_full_dir):

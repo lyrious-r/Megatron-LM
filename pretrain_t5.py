@@ -109,7 +109,7 @@ def loss_func(loss_mask, output_tensor):
         lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
 
     loss = lm_loss
-    if not args.use_plopt:
+    if not args.use_dynapipe:
         averaged_losses = average_losses_across_data_parallel_group([lm_loss])
         return loss, {'lm loss': averaged_losses[0]}
     else:

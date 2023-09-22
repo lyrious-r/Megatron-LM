@@ -16,7 +16,7 @@ with open(args.est_out, 'w') as est_f:
         act_f.write("exp_name,spec_name,dr,pr,tr,iteration,memory\n")
         for exp_name in tqdm(os.listdir(args.exp_dir), desc="Experiments"):
             exp_full_path = os.path.join(args.exp_dir, exp_name)
-            if "plopt" not in exp_name or not os.path.isdir(exp_full_path) or "bug" in exp_name:
+            if "dynapipe" not in exp_name or not os.path.isdir(exp_full_path) or "bug" in exp_name:
                 continue
             for spec_name in tqdm(os.listdir(exp_full_path), desc="Specs", leave=False):
                 # read log file to determine if it is a successful run
@@ -27,7 +27,7 @@ with open(args.est_out, 'w') as est_f:
                     if not "Training finished successfully." in log_file.read():
                         continue
                 # get estimated memory usage
-                ep_stats_dir = os.path.join(exp_full_path, spec_name, "plopt_ep_stats")
+                ep_stats_dir = os.path.join(exp_full_path, spec_name, "dynapipe_ep_stats")
                 estimated_memory_dir = os.path.join(ep_stats_dir, "estimated_memory")
                 if not os.path.isdir(estimated_memory_dir):
                     continue
@@ -41,7 +41,7 @@ with open(args.est_out, 'w') as est_f:
                                 memory = float(memory.strip())
                                 est_f.write("{},{},{},{},{}\n".format(exp_name, spec_name, dpg, iteration, memory))
                 # get actual memory usage
-                memory_stats_dir = os.path.join(exp_full_path, spec_name, "plopt_memory_stats")
+                memory_stats_dir = os.path.join(exp_full_path, spec_name, "dynapipe_memory_stats")
                 if not os.path.isdir(memory_stats_dir):
                     assert False, f"memory_stats_dir {memory_stats_dir} does not exist"
                     continue

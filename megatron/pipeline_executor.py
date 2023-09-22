@@ -1,8 +1,8 @@
 import os
 from functools import partial
 
-from plopt.pipe.instructions import * # noqa: F403
-from plopt.pipe.executor import PipelineExecutor
+from dynapipe.pipe.instructions import * # noqa: F403
+from dynapipe.pipe.executor import PipelineExecutor
 
 import torch
 import torch.distributed as dist
@@ -15,10 +15,10 @@ from megatron.model import Float16Module, ModelType
 from megatron.core import mpu
 from megatron.schedules import forward_step, backward_step, deallocate_output_tensor
 
-DEBUG_DUMP_MEMORY_STATS = os.getenv("PLOPT_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
-DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('PLOPT_DEBUG_DUMP_MEMORY_PREFIX', None)
+DEBUG_DUMP_MEMORY_STATS = os.getenv("DYNAPIPE_DEBUG_DUMP_MEMORY_STATS", 'False').lower() in ('true', '1', 't')
+DEBUG_DUMP_MEMORY_PREFIX = os.environ.get('DYNAPIPE_DEBUG_DUMP_MEMORY_PREFIX', None)
 if DEBUG_DUMP_MEMORY_STATS and not DEBUG_DUMP_MEMORY_PREFIX:
-    raise ValueError("PLOPT_DEBUG_DUMP_MEMORY_PREFIX must be set if PLOPT_DEBUG_DUMP_MEMORY_STATS is set")
+    raise ValueError("DYNAPIPE_DEBUG_DUMP_MEMORY_PREFIX must be set if DYNAPIPE_DEBUG_DUMP_MEMORY_STATS is set")
 
 def _dump_memory_stats(instr_id: int):
     if not DEBUG_DUMP_MEMORY_STATS:
@@ -32,8 +32,8 @@ def _dump_memory_stats(instr_id: int):
     dump_dir = os.path.join(DEBUG_DUMP_MEMORY_PREFIX, 'dr{}_pr{}_tr{}/microbatch_stats'.format(dp_rank, pp_rank, tp_rank))
     if not os.path.exists(dump_dir):
         os.makedirs(dump_dir)
-    if args.plopt_custom_allocator:
-        from plopt.memory_opt.cuda_caching_allocator import get_allocator
+    if args.dynapipe_custom_allocator:
+        from dynapipe.memory_opt.cuda_caching_allocator import get_allocator
         allocator = get_allocator()
 
         with open(os.path.join(dump_dir, f'iter{args.curr_iteration}_instr{instr_id}.txt'), 'w') as f:
@@ -196,7 +196,7 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
             exec.output_tensors[key] = list(zip(outputs, [True, False] if len(outputs) == 2 else [True]))
             if len(outputs) == 2:
                 # decoder stage, first output is decoder output, second is
-                # encoder activation. We need to swap them to match plopt's
+                # encoder activation. We need to swap them to match dynapipe's
                 # order
                 new_outputs = [outputs[1], outputs[0]]
                 outputs = new_outputs
@@ -280,7 +280,7 @@ _comm_instr_key_map = {
 def _transpose_tensor_shape(tensor_shape):
     # Megatron-LM expect communicated tensors to be
     # (sequence length, microbatch size, hidden size)
-    # while plopt expects them to be
+    # while dynapipe expects them to be
     # (microbatch size, sequence length, hidden size)
     return (tensor_shape[1], tensor_shape[0], tensor_shape[2])
 

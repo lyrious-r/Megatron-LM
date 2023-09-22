@@ -19,14 +19,14 @@ build
 .coverage_*
 *.egg-info
 *.pkl
-plopt_debug*/*
+dynapipe_debug*/*
 _memory_viz.py
 /*.svg
 /*.html
 /memory_trace*/*
 /memory_debug*/*
 /trace_debug*/*
-/plopt_ep_stats*/*
+/dynapipe_ep_stats*/*
 /test_*_debug_*/*
 /_*.ipynb
 /experiments/*

@@ -8,7 +8,7 @@ do
     # for seqlen in 512 1024 2048 4096
     for seqlen in 1024
     do
-        python3 run_experiment.py --model_type gpt --experiment_name gpt_6.7b_16l_tp2_pp2_plopt_small --tokens_per_global_batch $tokens --seq_length $seqlen
+        python3 run_experiment.py --model_type gpt --experiment_name gpt_6.7b_16l_tp2_pp2_dynapipe_small --tokens_per_global_batch $tokens --seq_length $seqlen
         echo "Sleeping for 5 seconds before killing processes"
         sleep 5
         pkill -f "pretrain_gpt"

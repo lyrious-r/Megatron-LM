@@ -75,8 +75,8 @@ def get_train_ds(data_path, vocab_file,
         offline_build=True)
     return train_ds
 
-def get_non_plopt_collate_fn(micro_batch_size, encoder_seq_length, decoder_seq_length, tokenizer, dynamic_batchsize=True):
-    def non_plopt_collate_fn(batch):
+def get_non_dynapipe_collate_fn(micro_batch_size, encoder_seq_length, decoder_seq_length, tokenizer, dynamic_batchsize=True):
+    def non_dynapipe_collate_fn(batch):
         # pad to max sequence length
         from torch.utils.data import default_collate
         result = []
@@ -103,7 +103,7 @@ def get_non_plopt_collate_fn(micro_batch_size, encoder_seq_length, decoder_seq_l
             assert len(result) == 1
             return result[0]
         return result
-    return non_plopt_collate_fn
+    return non_dynapipe_collate_fn
 
 def get_train_dataloader(dataset,
                          micro_batch_size,
@@ -137,7 +137,7 @@ def get_train_dataloader(dataset,
         is_training=True,
     )
     if isinstance(dataset, T5SupervisedDataset):
-        collate_fn = get_non_plopt_collate_fn(micro_batch_size=micro_batch_size,
+        collate_fn = get_non_dynapipe_collate_fn(micro_batch_size=micro_batch_size,
                                               encoder_seq_length=encoder_seq_length,
                                               decoder_seq_length=decoder_seq_length,
                                               tokenizer=tokenizer,

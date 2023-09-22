@@ -60,4 +60,4 @@ nsys profile -w true -t cuda,nvtx,osrt,cudnn,cublas -c cudaProfilerApi --capture
        --tokens-per-global-batch 16384 \
        --pack-dataset \
        --profile-with-nsys \
-       2>&1 | tee log_t5_plopt_finetune_linear_packed.txt
+       2>&1 | tee log_t5_dynapipe_finetune_linear_packed.txt

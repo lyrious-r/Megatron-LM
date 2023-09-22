@@ -59,7 +59,7 @@ class RedisKVStore(object):
                 if time.time() - t > KVREDIS_CONNECT_TIMEOUT:
                     raise RuntimeError(
                         "WARNING: Cannot connect to KV Server. "
-                        "Is PLOPT_KV_HOST and PLOPT_KV_PORT set correctly?"
+                        "Is DYNAPIPE_KV_HOST and DYNAPIPE_KV_PORT set correctly?"
                     )
                 continue
         print("Connected to KV Server at {}:{}, {} processes in total.".format(self.host, self.port, self.n_processes))
@@ -260,10 +260,10 @@ def _add_cluster_args(parser: argparse.ArgumentParser):
         "--gpus_per_node", type=int, default=4, help="Number of GPUs per node."
     )
     group.add_argument(
-        "--plopt_kv_host", type=str, default="localhost", help="KV store host."
+        "--dynapipe_kv_host", type=str, default="localhost", help="KV store host."
     )
     group.add_argument(
-        "--plopt_kv_port", type=int, default=6379, help="KV store port."
+        "--dynapipe_kv_port", type=int, default=6379, help="KV store port."
     )
     return parser, group
 
@@ -337,7 +337,7 @@ def _add_training_args(parser):
     group.add_argument(
         "--tokens_per_global_batch",
         type=int,
-        help="Tokens per global batch (used when enabling plopt).",
+        help="Tokens per global batch (used when enabling dynapipe).",
     )
     # if training_config is not specified, require the following args
     group.add_argument(
@@ -362,13 +362,13 @@ def _add_training_args(parser):
         "--micro_batch_size",
         type=int,
         default=8,
-        help="Micro-batch size (not used when enabling plopt).",
+        help="Micro-batch size (not used when enabling dynapipe).",
     )
     group.add_argument(
         "--global_batch_size",
         type=int,
         default=32,
-        help="Global batch size (not used when enabling plopt).",
+        help="Global batch size (not used when enabling dynapipe).",
     )
     group.add_argument(
         "--max_pos_embeddings",
@@ -388,7 +388,7 @@ def _add_training_args(parser):
         type=str,
         choices=["none", "selective", "full"],
         default="none",
-        help="Enable static recompute (not used when enabling plopt).",
+        help="Enable static recompute (not used when enabling dynapipe).",
     )
     group.add_argument(
         "--enable_deepspeed",
@@ -421,7 +421,7 @@ def _get_expected_gbs(args):
 
 
 def _check_training_args(args):
-    if args.enable_plopt:
+    if args.enable_dynapipe:
         # reset recompute level
         args.recompute_level = "none"
     if args.enable_deepspeed:
@@ -437,7 +437,7 @@ def _check_training_args(args):
         args.max_pos_embeddings = max(
             args.encoder_seq_length, args.decoder_seq_length
         )
-    if args.enable_plopt:
+    if args.enable_dynapipe:
         # micro batch size/global batch size is not used
         # make it 1 so it does not interfere with the check in Megatron-LM
         args.micro_batch_size = 1
@@ -450,116 +450,116 @@ def _check_training_args(args):
     return args
 
 
-def _add_plopt_args(parser):
-    group = parser.add_argument_group(title="PLOPT Config")
-    # training_config is used for plopt
+def _add_dynapipe_args(parser):
+    group = parser.add_argument_group(title="DynaPipe Config")
+    # training_config is used for dynapipe
     group.add_argument(
-        "--plopt_dump_stats",
+        "--dynapipe_dump_stats",
         type=bool,
         help="Dump memory, ep, and execution logs to file.",
     )
     group.add_argument(
-        "--enable_plopt", type=bool, default=False, help="Enable PLOPT."
+        "--enable_dynapipe", type=bool, default=False, help="Enable DynaPipe."
     )
     group.add_argument(
-        "--plopt_cost_model",
+        "--dynapipe_cost_model",
         type=str,
         default="default",
         help="Path to the cost model.",
     )
     group.add_argument(
-        "--plopt_device_to_node",
+        "--dynapipe_device_to_node",
         type=str,
         help="Mapping from rank to node, e.g. 0:0,1:0,2:1,3:1",
     )
     group.add_argument(
-        "--plopt_device_memory_limit",
+        "--dynapipe_device_memory_limit",
         type=int,
         help="Memory limit per device in MB.",
     )
     group.add_argument(
-        "--plopt_intra_node_bw",
+        "--dynapipe_intra_node_bw",
         type=int,
         default=4800,
         help="Intra-node bandwidth in gbps.",
     )
     group.add_argument(
-        "--plopt_inter_node_bw",
+        "--dynapipe_inter_node_bw",
         type=int,
         default=100,
         help="Inter-node bandwidth in gbps.",
     )
     group.add_argument(
-        "--plopt_layer_to_device",
+        "--dynapipe_layer_to_device",
         type=str,
         help="A list of device ids for each layer, e.g. 0,1,2,3,0,1,2,3",
     )
     group.add_argument(
-        "--plopt_prefetch_planner_num_workers",
+        "--dynapipe_prefetch_planner_num_workers",
         type=int,
         default=32,
         help="Number of workers for preprocessing (per node).",
     )
     group.add_argument(
-        "--plopt_debug_level", type=str, default="INFO", help="Debug level."
+        "--dynapipe_debug_level", type=str, default="INFO", help="Debug level."
     )
     group.add_argument(
-        "--plopt_debug_logging_dir", type=str, help="Debug logging dir."
+        "--dynapipe_debug_logging_dir", type=str, help="Debug logging dir."
     )
     group.add_argument(
-        "--plopt_debug_dump_ep_prefix",
+        "--dynapipe_debug_dump_ep_prefix",
         type=str,
         help="Directory to dump ep stats.",
     )
     group.add_argument(
-        "--plopt_debug_dump_memory_prefix",
+        "--dynapipe_debug_dump_memory_prefix",
         type=str,
         help="Directory to dump memory stats.",
     )
     group.add_argument(
-        "--plopt_enable_packing",
+        "--dynapipe_enable_packing",
         type=bool,
         default=False,
         help="Enable packing.",
     )
     group.add_argument(
-        "--plopt_partition_algo",
+        "--dynapipe_partition_algo",
         type=str,
         default="dp",
         help="Microbatch partition algorithm to use.",
     )
     group.add_argument(
-        "--plopt_token_based_partition_mbs",
+        "--dynapipe_token_based_partition_mbs",
         type=int,
         default=1024,
         help="Microbatch size for token-based partition.",
     )
     group.add_argument(
-        "--plopt_schedule_method",
+        "--dynapipe_schedule_method",
         type=str,
         default="dynamic",
         help="Schedule method to use.",
     )
     group.add_argument(
-        "--plopt_disable_mb_permutation",
+        "--dynapipe_disable_mb_permutation",
         type=bool,
         default=False,
         help="Disable microbatch permutation.",
     )
     group.add_argument(
-        "--plopt_disable_scheduler_memory_limit",
+        "--dynapipe_disable_scheduler_memory_limit",
         type=bool,
         default=False,
         help="Disable scheduler memory limit"
     )
     group.add_argument(
-        "--plopt_disable_tsp",
+        "--dynapipe_disable_tsp",
         type=bool,
         default=False,
         help="Disable tsp.",
     )
     group.add_argument(
-        "--plopt_limit_rc_type",
+        "--dynapipe_limit_rc_type",
         type=str,
         help="Limit rc type.",
     )
@@ -606,24 +606,24 @@ def _check_logging_args(args):
         return args, exp_logging_dir, True
     if not os.path.exists(exp_logging_dir):
         os.makedirs(exp_logging_dir)
-    if args.enable_plopt:
-        if args.plopt_dump_stats:
-            args.plopt_debug_level = "DEBUG"
+    if args.enable_dynapipe:
+        if args.dynapipe_dump_stats:
+            args.dynapipe_debug_level = "DEBUG"
         else:
-            args.plopt_debug_level = "INFO"
-        args.plopt_debug_logging_dir = os.path.join(
-            exp_logging_dir, "plopt_logs"
+            args.dynapipe_debug_level = "INFO"
+        args.dynapipe_debug_logging_dir = os.path.join(
+            exp_logging_dir, "dynapipe_logs"
         )
-        args.plopt_debug_dump_ep_prefix = os.path.join(
-            exp_logging_dir, "plopt_ep_stats"
+        args.dynapipe_debug_dump_ep_prefix = os.path.join(
+            exp_logging_dir, "dynapipe_ep_stats"
         )
-        args.plopt_debug_dump_memory_prefix = os.path.join(
-            exp_logging_dir, "plopt_memory_stats"
+        args.dynapipe_debug_dump_memory_prefix = os.path.join(
+            exp_logging_dir, "dynapipe_memory_stats"
         )
     else:
-        args.plopt_debug_logging_dir = "UNUSED"
-        args.plopt_debug_dump_ep_prefix = "UNUSED"
-        args.plopt_debug_dump_memory_prefix = "UNUSED"
+        args.dynapipe_debug_logging_dir = "UNUSED"
+        args.dynapipe_debug_dump_ep_prefix = "UNUSED"
+        args.dynapipe_debug_dump_memory_prefix = "UNUSED"
     args.stdout_stderr_log = os.path.join(exp_logging_dir, "stdout_stderr.log")
     # dump all args to a file
     args_file = os.path.join(exp_logging_dir, "args.json")
@@ -657,7 +657,7 @@ def _create_deepspeed_config(args, exp_logging_dir):
                 "ZeRO2 and ZeRO3 are not supported with pipeline parallelism."
             )
         # disable overlap comm if using pipeline parallelism
-        if args.pipeline_parallel_size > 1 or args.enable_plopt:
+        if args.pipeline_parallel_size > 1 or args.enable_dynapipe:
             overlap_comm = "false"
         else:
             overlap_comm = "true"
@@ -729,14 +729,14 @@ def grid_search_parallelism(args):
 
 
 def grid_search_ds_stage(args, reduce_configs=False):
-    if args.pipeline_parallel_size > 1 or args.enable_plopt:
-        # we can only use zero 1 with pipeline parallelism or with plopt
+    if args.pipeline_parallel_size > 1 or args.enable_dynapipe:
+        # we can only use zero 1 with pipeline parallelism or with dynapipe
         stage_candidates = [1, 0]
     else:
         # we can use zero 1, 2 with data and tensor parallelism
         stage_candidates = [2, 0]
     if reduce_configs:
-        if args.pipeline_parallel_size > 1 or args.enable_plopt:
+        if args.pipeline_parallel_size > 1 or args.enable_dynapipe:
             yield (True, 1)
         else:
             yield (True, 2)
@@ -748,8 +748,8 @@ def grid_search_ds_stage(args, reduce_configs=False):
 
 def grid_search_microbatch_size(dp_size, args):
     # this should be run after setting sequence length and global batch size
-    if args.enable_plopt:
-        # plopt use dynamic micro batch size
+    if args.enable_dynapipe:
+        # dynapipe use dynamic micro batch size
         yield 1
         return
     expected_gbs = _get_expected_gbs(args)
@@ -763,8 +763,8 @@ def grid_search_microbatch_size(dp_size, args):
 
 
 def grid_search_recomputation(args):
-    if args.enable_plopt:
-        # plopt use dynamic recomputation
+    if args.enable_dynapipe:
+        # dynapipe use dynamic recomputation
         yield "none"
         return
     for recompute_level in ["none", "selective", "full"]:
@@ -843,7 +843,7 @@ class ExperimentConfig:
     rc: str = "none"
     ds_level: int = 0
     spp: bool = False
-    plopt_memory_limit: int = 0
+    dynapipe_memory_limit: int = 0
     status: str = "unknown"
 
     def speed_dominates(self, other):
@@ -888,8 +888,8 @@ class ExperimentConfig:
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
             or self.spp != other.spp
-            or self.plopt_memory_limit != 36000
-            or other.plopt_memory_limit != 36000
+            or self.dynapipe_memory_limit != 36000
+            or other.dynapipe_memory_limit != 36000
         ):
             return False
         # dominance happens if sequence length is higher, mbs is higher,
@@ -947,7 +947,7 @@ class ExperimentConfig:
             elif item.startswith("spp"):
                 config.spp = True
             elif item.startswith("memlimit"):
-                config.plopt_memory_limit = int(item[8:])
+                config.dynapipe_memory_limit = int(item[8:])
         # test status
         config.status = ExperimentConfig.parse_experiment_status(exp_dir)
         return config
@@ -974,8 +974,8 @@ def generate_dynapipe_exp_configs(args):
                 args.pipeline_parallel_size = pp
                 if pp > 1:
                     args.pp_split_rank = get_pp_split_rank(pp)
-                args.plopt_device_to_node = get_pp_device_to_node_str(args)
-                args.plopt_layer_to_device = get_layer_to_device(args)
+                args.dynapipe_device_to_node = get_pp_device_to_node_str(args)
+                args.dynapipe_layer_to_device = get_layer_to_device(args)
                 ####  Micro batch size  ####
                 for mbs in grid_search_microbatch_size(dp, args):
                     args.micro_batch_size = mbs
@@ -1019,30 +1019,30 @@ def get_exp_spec_name(args):
             args.decoder_seq_length,
             args.tokens_per_global_batch,
         )
-    if not args.enable_plopt:
+    if not args.enable_dynapipe:
         exp_spec_name += "_mbs{}_rc{}".format(
             args.micro_batch_size, args.recompute_level
         )
     if args.enable_deepspeed:
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
-    if args.enable_plopt and args.plopt_enable_packing:
+    if args.enable_dynapipe and args.dynapipe_enable_packing:
         exp_spec_name += "_spp" # for seqlen preserving packing
-    if args.enable_plopt:
-        exp_spec_name += "_memlimit{}".format(args.plopt_device_memory_limit)
-    if args.plopt_partition_algo != "dp":
-        exp_spec_name += "_{}".format(args.plopt_partition_algo)
-        assert args.plopt_token_based_partition_mbs is not None
-        exp_spec_name += "_{}".format(args.plopt_token_based_partition_mbs)
-    if args.plopt_schedule_method != "dynamic":
-        exp_spec_name += "_sch_{}".format(args.plopt_schedule_method)
-    if args.plopt_disable_mb_permutation:
+    if args.enable_dynapipe:
+        exp_spec_name += "_memlimit{}".format(args.dynapipe_device_memory_limit)
+    if args.dynapipe_partition_algo != "dp":
+        exp_spec_name += "_{}".format(args.dynapipe_partition_algo)
+        assert args.dynapipe_token_based_partition_mbs is not None
+        exp_spec_name += "_{}".format(args.dynapipe_token_based_partition_mbs)
+    if args.dynapipe_schedule_method != "dynamic":
+        exp_spec_name += "_sch_{}".format(args.dynapipe_schedule_method)
+    if args.dynapipe_disable_mb_permutation:
         exp_spec_name += "_noperm"
-    if args.plopt_disable_scheduler_memory_limit:
+    if args.dynapipe_disable_scheduler_memory_limit:
         exp_spec_name += "_noschmemlim"
-    if args.plopt_disable_tsp:
+    if args.dynapipe_disable_tsp:
         exp_spec_name += "_notsp"
-    if args.plopt_limit_rc_type:
-        exp_spec_name += "_limitrc_{}".format(args.plopt_limit_rc_type)
+    if args.dynapipe_limit_rc_type:
+        exp_spec_name += "_limitrc_{}".format(args.dynapipe_limit_rc_type)
     return exp_spec_name
 
 
@@ -1052,14 +1052,14 @@ def read_dynapipe_exp_configs(args):
         for obj in reader:
             saved_states = {}
             for k, v in obj.items():
-                if k != "plopt_enable_packing":
+                if k != "dynapipe_enable_packing":
                     if hasattr(args, k):
                         saved_states[k] = getattr(args, k)
                     setattr(args, k, v)
             if args.pipeline_parallel_size > 1:
                 args.pp_split_rank = get_pp_split_rank(args.pipeline_parallel_size)
-            args.plopt_device_to_node = get_pp_device_to_node_str(args)
-            args.plopt_layer_to_device = get_layer_to_device(args)
+            args.dynapipe_device_to_node = get_pp_device_to_node_str(args)
+            args.dynapipe_layer_to_device = get_layer_to_device(args)
             args.train_iters = 1000000000
             yield args
             # restore args
@@ -1082,7 +1082,7 @@ def kill_non_controller_redis_servers(args):
                 os.system(f"kill -9 {pid}")
 
 
-def cleanup_plopt_job(args):
+def cleanup_dynapipe_job(args):
     os.system("pkill -9 -f 'pretrain_t5'")
     os.system("pkill -9 -f 'pretrain_gpt'")
     kill_non_controller_redis_servers(args)
@@ -1131,8 +1131,8 @@ def run_batch_experiments(args):
                 break
         if should_skip:
             continue
-        if args.enable_plopt:
-            initial_memlimit = current_args.plopt_device_memory_limit
+        if args.enable_dynapipe:
+            initial_memlimit = current_args.dynapipe_device_memory_limit
         assert hasattr(args, "kvstore") and args.kvstore is not None
         kv: RedisKVStore = args.kvstore
         while True:
@@ -1196,7 +1196,7 @@ def run_batch_experiments(args):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
-                    if args.enable_plopt and (
+                    if args.enable_dynapipe and (
                         "OutOfMemoryError" in current_content or
                         "out of memory" in current_content
                     ) and "Running iteration" in current_content:
@@ -1215,7 +1215,7 @@ def run_batch_experiments(args):
                         # timeout
                         print_fn("Timeout running spec {}.".format(spec_basename))
                         should_abort = True
-                        if args.enable_plopt:
+                        if args.enable_dynapipe:
                             should_restart = True
                 if should_abort and should_restart:
                     print_fn("Setting status to restart for spec {}.".format(spec_basename))
@@ -1240,7 +1240,7 @@ def run_batch_experiments(args):
                     # kill the job on all nodes
                     if p.poll() is None:
                         p.kill()
-                    cleanup_plopt_job(args)
+                    cleanup_dynapipe_job(args)
                     break
                 # check if the entire script needs to abort
                 if kv.check_abort_signal():
@@ -1259,15 +1259,15 @@ def run_batch_experiments(args):
                     current_status = "restart"
             should_abort = current_status in ["abort", "restart"]
             should_restart = current_status == "restart"
-            cleanup_plopt_job(args)
+            cleanup_dynapipe_job(args)
             if not should_restart:
                 break
             else:
                 # decrease memory limit and restart
-                if current_args.plopt_device_memory_limit < 10000:
+                if current_args.dynapipe_device_memory_limit < 10000:
                     break
-                current_args.plopt_device_memory_limit -= 1000
-                print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
+                current_args.dynapipe_device_memory_limit -= 1000
+                print_fn("Restarting with lower memory limit: {}.".format(current_args.dynapipe_device_memory_limit))
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
@@ -1299,8 +1299,8 @@ def run_batch_experiments(args):
             raise ValueError(
                 f"Failed to parse experiment status: {exp_logging_dir}"
             )
-        if args.enable_plopt:
-            current_args.plopt_device_memory_limit = initial_memlimit
+        if args.enable_dynapipe:
+            current_args.dynapipe_device_memory_limit = initial_memlimit
 
 def run_best_config(args):
     global print_fn
@@ -1309,8 +1309,8 @@ def run_best_config(args):
     config_iterator = tqdm(config_iterator)
     print_fn = config_iterator.write
     for current_args in config_iterator:
-        if args.enable_plopt:
-            initial_memlimit = current_args.plopt_device_memory_limit
+        if args.enable_dynapipe:
+            initial_memlimit = current_args.dynapipe_device_memory_limit
         assert hasattr(args, "kvstore") and args.kvstore is not None
         kv: RedisKVStore = args.kvstore
         while True:
@@ -1360,7 +1360,7 @@ def run_best_config(args):
                     # error
                     print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
-                    if args.enable_plopt and (
+                    if args.enable_dynapipe and (
                         "OutOfMemoryError" in current_content or
                         "out of memory" in current_content
                     ) and "Running iteration" in current_content:
@@ -1378,7 +1378,7 @@ def run_best_config(args):
                         # timeout
                         print_fn("Timeout running spec {}.".format(spec_basename))
                         should_abort = True
-                        if args.enable_plopt:
+                        if args.enable_dynapipe:
                             should_restart = True
                 if should_abort and should_restart:
                     print_fn("Setting status to restart for spec {}.".format(spec_basename))
@@ -1403,7 +1403,7 @@ def run_best_config(args):
                     # kill the job on all nodes
                     if p.poll() is None:
                         p.kill()
-                    cleanup_plopt_job(args)
+                    cleanup_dynapipe_job(args)
                     break
                 # check if the entire script needs to abort
                 if kv.check_abort_signal():
@@ -1415,22 +1415,22 @@ def run_best_config(args):
             if current_status is not None:
                 current_status = current_status.decode()
             should_restart = current_status == "restart"
-            cleanup_plopt_job(args)
+            cleanup_dynapipe_job(args)
             if not should_restart:
                 break
             else:
                 # decrease memory limit and restart
-                if current_args.plopt_device_memory_limit < 10000:
+                if current_args.dynapipe_device_memory_limit < 10000:
                     break
-                current_args.plopt_device_memory_limit -= 1000
-                print_fn("Restarting with lower memory limit: {}.".format(current_args.plopt_device_memory_limit))
+                current_args.dynapipe_device_memory_limit -= 1000
+                print_fn("Restarting with lower memory limit: {}.".format(current_args.dynapipe_device_memory_limit))
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
                     kv.set(spec_basename + "status", "running")
                 kv.barrier()
-        if args.enable_plopt:
-            current_args.plopt_device_memory_limit = initial_memlimit
+        if args.enable_dynapipe:
+            current_args.dynapipe_device_memory_limit = initial_memlimit
 
 def _parse_args():
     parser = argparse.ArgumentParser("Experiment runner for T5 and GPT.")
@@ -1456,18 +1456,18 @@ def _parse_args():
     parser, model_group = _add_model_args(parser)
     parser, data_group = _add_data_args(parser)
     parser, training_group = _add_training_args(parser)
-    parser, plopt_group = _add_plopt_args(parser)
+    parser, dynapipe_group = _add_dynapipe_args(parser)
     parser, exp_group = _add_experiment_args(parser)
     args = parser.parse_args()
 
     # if experiment config exists, load it
     if args.experiment_name.endswith("_spp"):
-        args.plopt_enable_packing = True
+        args.dynapipe_enable_packing = True
         config_name = args.experiment_name[:-4] + ".json"
     elif args.experiment_name.endswith("_best"):
         raw_config_name = args.experiment_name[:-5]
         if raw_config_name.endswith("_spp"):
-            args.plopt_enable_packing = True
+            args.dynapipe_enable_packing = True
             raw_config_name = raw_config_name[:-4]
         config_name = raw_config_name + ".json"
         args.run_best_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
@@ -1530,7 +1530,7 @@ def _parse_args():
     # if running experiment in batch, don't check training args that we
     # are going to search through
     training_optional_args = []
-    plopt_optional_args = ["plopt_enable_packing", "plopt_limit_rc_type"]
+    dynapipe_optional_args = ["dynapipe_enable_packing", "dynapipe_limit_rc_type"]
     if args.batch_experiments or args.run_best_config:
         if args.batch_experiments:
             assert (
@@ -1546,9 +1546,9 @@ def _parse_args():
             "decoder_seq_length",
         ]
         training_optional_args += ["tokens_per_global_batch"]
-        plopt_optional_args += [
-            "plopt_device_to_node",
-            "plopt_layer_to_device",
+        dynapipe_optional_args += [
+            "dynapipe_device_to_node",
+            "dynapipe_layer_to_device",
         ]
     else:
         training_optional_args = ["deepspeed_zero_stage"]
@@ -1567,15 +1567,15 @@ def _parse_args():
     )
     _postprocess_group_args(
         args,
-        plopt_group,
+        dynapipe_group,
         "training_config",
-        optional_args=plopt_optional_args
+        optional_args=dynapipe_optional_args
         + [
-            "plopt_debug_logging_dir",
-            "plopt_debug_dump_ep_prefix",
-            "plopt_debug_dump_memory_prefix",
+            "dynapipe_debug_logging_dir",
+            "dynapipe_debug_dump_ep_prefix",
+            "dynapipe_debug_dump_memory_prefix",
         ],
-        switch_arg="enable_plopt",
+        switch_arg="enable_dynapipe",
     )
 
 
@@ -1603,7 +1603,7 @@ def _get_shell_script(args):
         pipeline_args = (
             f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
         )
-        # if args.enable_plopt:
+        # if args.enable_dynapipe:
         #     n_encoder_layers_per_device = args.encoder_num_layers // (args.pipeline_parallel_size // 2)
         #     n_decoder_layers_per_device = args.decoder_num_layers // (args.pipeline_parallel_size // 2)
         #     assert n_encoder_layers_per_device == n_decoder_layers_per_device, (
@@ -1617,10 +1617,10 @@ def _get_shell_script(args):
         pipeline_args = ""
     # construct recompute args
     recompute_args = ""
-    if args.enable_plopt:
+    if args.enable_dynapipe:
         assert (
             args.recompute_level == "none"
-        ), "Plopt uses dynamic recomputation, recompute_level is overriden."
+        ), "Dynapipe uses dynamic recomputation, recompute_level is overriden."
         # although recompute_level is none, we still need to set recompute
         # method, which is required if full recompute is chosen
         recompute_args = "--recompute-method uniform"
@@ -1635,49 +1635,49 @@ def _get_shell_script(args):
             args.recompute_level == "none"
         ), f"Invalid recompute level {args.recompute_level}"
     # construct dynamic batch args
-    if args.enable_plopt:
+    if args.enable_dynapipe:
         batching_args = (
             "--dynamic-batchsize "
             + f"--tokens-per-global-batch {args.tokens_per_global_batch}"
         )
     else:
         batching_args = "--pack-dataset"
-    # construct plopt args
-    if not args.enable_plopt:
-        plopt_args = ""
+    # construct dynapipe args
+    if not args.enable_dynapipe:
+        dynapipe_args = ""
     else:
-        plopt_args = [
-            "--use-plopt",
-            f"--plopt-cost-model {args.plopt_cost_model}",
-            f"--plopt-device-to-node {args.plopt_device_to_node}",
-            f"--plopt-device-memory-limit {args.plopt_device_memory_limit}",
-            f"--plopt-intra-node-bw {args.plopt_intra_node_bw}",
-            f"--plopt-inter-node-bw {args.plopt_inter_node_bw}",
-            f"--plopt-layer-to-device {args.plopt_layer_to_device}",
-            "--plopt-prefetch-planner-num-workers "
-            + f"{args.plopt_prefetch_planner_num_workers}",
-            f"--plopt-zero-stage {args.deepspeed_zero_stage}",
-            "--plopt-reserve-all-memory",
-            "--plopt-custom-allocator",
-            f"--plopt-partition-algo {args.plopt_partition_algo}",
-            f"--plopt-token-based-partition-mbs {args.plopt_token_based_partition_mbs}",
-            f"--plopt-schedule-method {args.plopt_schedule_method}",
+        dynapipe_args = [
+            "--use-dynapipe",
+            f"--dynapipe-cost-model {args.dynapipe_cost_model}",
+            f"--dynapipe-device-to-node {args.dynapipe_device_to_node}",
+            f"--dynapipe-device-memory-limit {args.dynapipe_device_memory_limit}",
+            f"--dynapipe-intra-node-bw {args.dynapipe_intra_node_bw}",
+            f"--dynapipe-inter-node-bw {args.dynapipe_inter_node_bw}",
+            f"--dynapipe-layer-to-device {args.dynapipe_layer_to_device}",
+            "--dynapipe-prefetch-planner-num-workers "
+            + f"{args.dynapipe_prefetch_planner_num_workers}",
+            f"--dynapipe-zero-stage {args.deepspeed_zero_stage}",
+            "--dynapipe-reserve-all-memory",
+            "--dynapipe-custom-allocator",
+            f"--dynapipe-partition-algo {args.dynapipe_partition_algo}",
+            f"--dynapipe-token-based-partition-mbs {args.dynapipe_token_based_partition_mbs}",
+            f"--dynapipe-schedule-method {args.dynapipe_schedule_method}",
         ]
-        if args.plopt_disable_mb_permutation:
-            plopt_args.append("--plopt-disable-mb-permutation")
-        if args.plopt_disable_scheduler_memory_limit:
-            plopt_args.append("--plopt-disable-scheduler-memory-limit")
-        if args.plopt_disable_tsp:
-            plopt_args.append("--plopt-disable-tsp")
+        if args.dynapipe_disable_mb_permutation:
+            dynapipe_args.append("--dynapipe-disable-mb-permutation")
+        if args.dynapipe_disable_scheduler_memory_limit:
+            dynapipe_args.append("--dynapipe-disable-scheduler-memory-limit")
+        if args.dynapipe_disable_tsp:
+            dynapipe_args.append("--dynapipe-disable-tsp")
         if args.model_type == "gpt":
-            plopt_args.append("--plopt-seqlen-offset 1")
-        if args.plopt_enable_packing:
-            plopt_args.append("--plopt-enable-packing")
-        if args.plopt_limit_rc_type:
-            plopt_args.append(
-                f"--plopt-limit-rc-type {args.plopt_limit_rc_type}"
+            dynapipe_args.append("--dynapipe-seqlen-offset 1")
+        if args.dynapipe_enable_packing:
+            dynapipe_args.append("--dynapipe-enable-packing")
+        if args.dynapipe_limit_rc_type:
+            dynapipe_args.append(
+                f"--dynapipe-limit-rc-type {args.dynapipe_limit_rc_type}"
             )
-        plopt_args = " ".join(plopt_args)
+        dynapipe_args = " ".join(dynapipe_args)
     # construct deepspeed args
     if not args.enable_deepspeed:
         deepspeed_args = ""
@@ -1693,7 +1693,7 @@ def _get_shell_script(args):
             "pipeline_args": pipeline_args,
             "recompute_args": recompute_args,
             "batching_args": batching_args,
-            "plopt_args": plopt_args,
+            "dynapipe_args": dynapipe_args,
             "deepspeed_args": deepspeed_args,
         }
     )

@@ -1,7 +1,7 @@
 {
-    "enable_plopt": true,
-    "plopt_cost_model": "./cost_models/gpt_6.7b_cm.pkl",
-    "plopt_device_memory_limit": 36000,
-    "plopt_prefetch_planner_num_workers": 64,
+    "enable_dynapipe": true,
+    "dynapipe_cost_model": "./cost_models/gpt_6.7b_cm.pkl",
+    "dynapipe_device_memory_limit": 36000,
+    "dynapipe_prefetch_planner_num_workers": 64,
     "train_iters": 40
 }

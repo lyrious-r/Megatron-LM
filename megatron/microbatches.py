@@ -10,7 +10,7 @@ def build_num_microbatches_calculator(args):
 
     # Constant num micro-batches.
     if args.rampup_batch_size is None:
-        if args.dynamic_batchsize and not args.use_plopt:
+        if args.dynamic_batchsize and not args.use_dynapipe:
             seqlen_per_sample = args.encoder_seq_length + args.decoder_seq_length
             num_samples = args.tokens_per_global_batch // seqlen_per_sample
             while num_samples % args.micro_batch_size != 0:

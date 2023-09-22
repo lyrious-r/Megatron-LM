@@ -30,7 +30,7 @@ with open(args.est_out, 'w') as est_f:
         act_f.write("exp_name,spec_name,measured_time\n")
         for exp_name in tqdm(os.listdir(args.exp_dir), desc="Experiments"):
             exp_full_path = os.path.join(args.exp_dir, exp_name)
-            if "plopt" not in exp_name or not os.path.isdir(exp_full_path) or "bug" in exp_name:
+            if "dynapipe" not in exp_name or not os.path.isdir(exp_full_path) or "bug" in exp_name:
                 continue
             for spec_name in tqdm(os.listdir(exp_full_path), desc="Specs", leave=False):
                 # read log file to determine if it is a successful run
@@ -46,7 +46,7 @@ with open(args.est_out, 'w') as est_f:
                 if measured_time != float("inf"):
                     act_f.write("{},{},{}\n".format(exp_name, spec_name, measured_time))
                 # get estimated time by reading simulated traces
-                ep_stats_dir = os.path.join(exp_full_path, spec_name, "plopt_ep_stats")
+                ep_stats_dir = os.path.join(exp_full_path, spec_name, "dynapipe_ep_stats")
                 traces_dir = os.path.join(ep_stats_dir, "per_iter_simulated_traces")
                 if not os.path.isdir(traces_dir):
                     continue

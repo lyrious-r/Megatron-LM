@@ -2,6 +2,6 @@
     "cluster_config": "./experiment_configs/cluster_configs/mid.json",
     "model_config": "./experiment_configs/model_configs/gpt_6.7b_32l.json",
     "data_config": "./experiment_configs/data_configs/flan_zsopt_gpt.json",
-    "training_config": "./experiment_configs/training_configs/gpt6.7b_plopt.json",
-    "plopt_dump_stats": true
+    "training_config": "./experiment_configs/training_configs/gpt6.7b_dynapipe.json",
+    "dynapipe_dump_stats": true
 }
