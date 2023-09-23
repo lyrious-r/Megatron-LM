@@ -43,7 +43,7 @@ from megatron.utils import average_losses_across_data_parallel_group
 
 ENABLE_MEMORY_TRACE = False
 MEMORY_TRACE_DIR = "./microbench_memory_trace"
-WARMUP_ITERATIONS = 20
+WARMUP_ITERATIONS = 5
 TRACE_AT_ITER = WARMUP_ITERATIONS + 2
 BENCHMARK_START_ITER = WARMUP_ITERATIONS + 5
 timer_disabled = True
@@ -565,9 +565,9 @@ def benchmark_train(
     # Iterations.
     iteration = args.iteration
     assert (
-        args.train_iters >= WARMUP_ITERATIONS
+        args.train_iters >= BENCHMARK_START_ITER
     ), "train_iters must be greater than or equal to {} for benchmarking".format(
-        WARMUP_ITERATIONS
+        BENCHMARK_START_ITER
     )
 
     while iteration < args.train_iters:
