@@ -57,6 +57,4 @@ for input_fn in args.input:
                     output_json["recompute_level"] = best_config["rc"]
                     output_json["enable_deepspeed"] = (best_config["ds_level"] >= 1)
                     output_json["deepspeed_zero_stage"] = best_config["ds_level"]
-                    if "spp" in best_config:
-                        output_json["dynapipe_enable_packing"] = best_config["spp"]
                     writer.write(output_json)

@@ -25,7 +25,6 @@ class ExperimentConfig:
     mbs: int = 1
     rc: str = "none"
     ds_level: int = 0
-    spp: bool = False
     status: str = "unknown"
 
     def speed_dominates(self, other):
@@ -41,7 +40,6 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
-            or self.spp != other.spp
         ):
             return False
         # dominance happens if ds_level is lower, and mbs is higher,
@@ -69,7 +67,6 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
-            or self.spp != other.spp
         ):
             return False
         # dominance happens if sequence length is higher, mbs is higher,
@@ -124,8 +121,6 @@ class ExperimentConfig:
                 config.rc = item[2:]
             elif item.startswith("zero"):
                 config.ds_level = int(item[4:])
-            elif item.startswith("spp"):
-                config.spp = True
         # test status
         config.status = ExperimentConfig.parse_experiment_status(exp_dir)
         return config

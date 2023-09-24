@@ -34,6 +34,7 @@ KVREDIS_POLLING_INTERVAL = 0.5
 
 print_fn = print
 
+# redis client to track experiment progress between different nodes
 class RedisKVStore(object):
     # a blocking local redis client
     def __init__(self, args):
@@ -430,7 +431,7 @@ def _check_training_args(args):
                 "Argument deepspeed_zero_stage is required "
                 "when enable_deepspeed is True."
             )
-    # automatically set max_pos_embeddings
+    # automatically set max_pos_embeddings to seq length
     if args.model_type == "gpt":
         args.max_pos_embeddings = args.seq_length
     else:
@@ -569,15 +570,16 @@ def _add_dynapipe_args(parser):
 def _add_experiment_args(parser):
     group = parser.add_argument_group(title="Experiment Config")
     group.add_argument(
-        "--batch_experiments",
+        "--grid_experiments",
         type=bool,
         default=False,
-        help="Run experiment items in batch.",
+        help="Run grid search run over a range of "
+             "sequence lengths and global batch sizes.",
     )
     group.add_argument(
         "--sequence_length_range",
         type=str,
-        default="512,1024,2048,4096,8192,16384,32768",
+        default="512,1024,2048,4096,8192",
         help="Sequence length range.",
     )
     group.add_argument(
@@ -587,7 +589,7 @@ def _add_experiment_args(parser):
         help="Global batch size range.",
     )
     group.add_argument(
-        "--run_best_config",
+        "--run_config",
         type=str,
         help="Run the experiments specified by the config.",
     )
@@ -598,6 +600,7 @@ def _check_logging_args(args):
     exp_spec_name = get_exp_spec_name(args)
     exp_logging_dir = os.path.join(
         EXPERIMENT_DIR_PREFIX,
+        args.experiment_type,
         args.experiment_name,
         exp_spec_name,
     )
@@ -842,7 +845,6 @@ class ExperimentConfig:
     mbs: int = 1
     rc: str = "none"
     ds_level: int = 0
-    spp: bool = False
     dynapipe_memory_limit: int = 0
     status: str = "unknown"
 
@@ -859,7 +861,6 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
-            or self.spp != other.spp
         ):
             return False
         # dominance happens if ds_level is lower, and mbs is higher,
@@ -887,7 +888,6 @@ class ExperimentConfig:
             or self.dp_size != other.dp_size
             or self.tp_size != other.tp_size
             or self.pp_size != other.pp_size
-            or self.spp != other.spp
             or self.dynapipe_memory_limit != 36000
             or other.dynapipe_memory_limit != 36000
         ):
@@ -944,8 +944,6 @@ class ExperimentConfig:
                 config.rc = item[2:]
             elif item.startswith("zero"):
                 config.ds_level = int(item[4:])
-            elif item.startswith("spp"):
-                config.spp = True
             elif item.startswith("memlimit"):
                 config.dynapipe_memory_limit = int(item[8:])
         # test status
@@ -953,9 +951,10 @@ class ExperimentConfig:
         return config
 
 
-def generate_dynapipe_exp_configs(args):
+def generate_grid_search_exp_configs(args):
     seqlens = [int(sl) for sl in args.sequence_length_range.split(",")]
     gbs_tokens = [int(gbs) for gbs in args.global_batch_size_range.split(",")]
+    args.train_iters = 40 # only profile 40 iters in grid search to reduce time
     ####  Sequence length  ####
     for seqlen in seqlens:
         if args.model_type == "t5":
@@ -1025,8 +1024,6 @@ def get_exp_spec_name(args):
         )
     if args.enable_deepspeed:
         exp_spec_name += "_zero{}".format(args.deepspeed_zero_stage)
-    if args.enable_dynapipe and args.dynapipe_enable_packing:
-        exp_spec_name += "_spp" # for seqlen preserving packing
     if args.enable_dynapipe:
         exp_spec_name += "_memlimit{}".format(args.dynapipe_device_memory_limit)
     if args.dynapipe_partition_algo != "dp":
@@ -1047,15 +1044,14 @@ def get_exp_spec_name(args):
 
 
 def read_dynapipe_exp_configs(args):
-    config_path = args.run_best_config
+    config_path = args.run_config
     with jsonlines.open(config_path, "r") as reader:
         for obj in reader:
             saved_states = {}
             for k, v in obj.items():
-                if k != "dynapipe_enable_packing":
-                    if hasattr(args, k):
-                        saved_states[k] = getattr(args, k)
-                    setattr(args, k, v)
+                if hasattr(args, k):
+                    saved_states[k] = getattr(args, k)
+                setattr(args, k, v)
             if args.pipeline_parallel_size > 1:
                 args.pp_split_rank = get_pp_split_rank(args.pipeline_parallel_size)
             args.dynapipe_device_to_node = get_pp_device_to_node_str(args)
@@ -1088,11 +1084,11 @@ def cleanup_dynapipe_job(args):
     kill_non_controller_redis_servers(args)
 
 
-def run_batch_experiments(args):
+def run_grid_experiments(args):
     global print_fn
     past_success_configs = []
     past_failures_configs = []
-    exp_dir = os.path.join(EXPERIMENT_DIR_PREFIX, args.experiment_name)
+    exp_dir = os.path.join(EXPERIMENT_DIR_PREFIX, args.experiment_type, args.experiment_name)
     if os.path.isdir(exp_dir):
         for exp_spec_dir in [
             x for x in os.listdir(exp_dir) if os.path.isdir(x)
@@ -1105,7 +1101,7 @@ def run_batch_experiments(args):
                 past_success_configs.append(config)
             else:
                 past_failures_configs.append(config)
-    config_iterator = generate_dynapipe_exp_configs(args)
+    config_iterator = generate_grid_search_exp_configs(args)
     from tqdm import tqdm
     config_iterator = tqdm(config_iterator)
     print_fn = config_iterator.write
@@ -1194,13 +1190,11 @@ def run_batch_experiments(args):
                     "RuntimeError" in current_content or 
                     "out of memory" in current_content):
                     # error
-                    print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
                     if args.enable_dynapipe and (
                         "OutOfMemoryError" in current_content or
                         "out of memory" in current_content
                     ) and "Running iteration" in current_content:
-                        print("Setting status to restart for spec {}.".format(spec_basename))
                         should_restart = True
                 elif current_content != prev_content:
                     # progress
@@ -1213,21 +1207,18 @@ def run_batch_experiments(args):
                         > EXPERIMENT_PROGRESS_TIMEOUT
                     ):
                         # timeout
-                        print_fn("Timeout running spec {}.".format(spec_basename))
                         should_abort = True
                         if args.enable_dynapipe:
                             should_restart = True
                 if should_abort and should_restart:
-                    print_fn("Setting status to restart for spec {}.".format(spec_basename))
                     kv.set(spec_basename + f"status_{args.node_rank}", "restart")
                 elif should_abort:
-                    print_fn("Setting status to abort for spec {}.".format(spec_basename))
                     kv.set(spec_basename + f"status_{args.node_rank}", "abort")
                 # get the most updated status from all nodes
                 current_status = None
                 for i in range(args.nnodes):
                     node_status = kv.get(spec_basename + f"status_{i}")
-                    if node_status is not None:
+                    if node_status is not None and not isinstance(node_status, str):
                         node_status = node_status.decode()
                     if current_status is None:
                         current_status = node_status
@@ -1236,7 +1227,6 @@ def run_batch_experiments(args):
                 should_abort = current_status in ["abort", "restart"]
                 should_restart = current_status == "restart"
                 if should_abort:
-                    print_fn("Abort running spec {}.".format(spec_basename))
                     # kill the job on all nodes
                     if p.poll() is None:
                         p.kill()
@@ -1251,7 +1241,7 @@ def run_batch_experiments(args):
             current_status = None
             for i in range(args.nnodes):
                 node_status = kv.get(spec_basename + f"status_{i}")
-                if node_status is not None:
+                if node_status is not None and not isinstance(node_status, str):
                     node_status = node_status.decode()
                 if current_status is None:
                     current_status = node_status
@@ -1271,7 +1261,8 @@ def run_batch_experiments(args):
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
-                    kv.set(spec_basename + "status", "running")
+                    for i in range(args.nnodes):
+                        kv.set(spec_basename + f"status_{i}", "running")
                 kv.barrier()
         print_fn("Exchanging status for experiment {}.".format(current_exp_config))
         # check current experiment status
@@ -1302,7 +1293,7 @@ def run_batch_experiments(args):
         if args.enable_dynapipe:
             current_args.dynapipe_device_memory_limit = initial_memlimit
 
-def run_best_config(args):
+def run_config(args):
     global print_fn
     config_iterator = read_dynapipe_exp_configs(args)
     from tqdm import tqdm
@@ -1358,7 +1349,6 @@ def run_best_config(args):
                     "RuntimeError" in current_content or
                     "out of memory" in current_content):
                     # error
-                    print_fn("Error running spec {}. Proceed to the next.".format(spec_basename))
                     should_abort = True
                     if args.enable_dynapipe and (
                         "OutOfMemoryError" in current_content or
@@ -1381,16 +1371,14 @@ def run_best_config(args):
                         if args.enable_dynapipe:
                             should_restart = True
                 if should_abort and should_restart:
-                    print_fn("Setting status to restart for spec {}.".format(spec_basename))
                     kv.set(spec_basename + f"status_{args.node_rank}", "restart")
                 elif should_abort:
-                    print_fn("Setting status to abort for spec {}.".format(spec_basename))
                     kv.set(spec_basename + f"status_{args.node_rank}", "abort")
                 # get the most updated status from all nodes
                 current_status = None
                 for i in range(args.nnodes):
                     node_status = kv.get(spec_basename + f"status_{i}")
-                    if node_status is not None:
+                    if node_status is not None and not isinstance(node_status, str):
                         node_status = node_status.decode()
                     if current_status is None:
                         current_status = node_status
@@ -1399,7 +1387,6 @@ def run_best_config(args):
                 should_abort = current_status in ["abort", "restart"]
                 should_restart = current_status == "restart"
                 if should_abort:
-                    print_fn("Abort running spec {}.".format(spec_basename))
                     # kill the job on all nodes
                     if p.poll() is None:
                         p.kill()
@@ -1411,8 +1398,16 @@ def run_best_config(args):
                 time.sleep(EXPERIMENT_PROGRESS_POLL_INTERVAL)
             kv.barrier()
             # check restart status again incase some nodes exit early
-            current_status = kv.get(spec_basename + "status")
-            if current_status is not None:
+            current_status = None
+            for i in range(args.nnodes):
+                node_status = kv.get(spec_basename + f"status_{i}")
+                if node_status is not None and not isinstance(node_status, str):
+                    node_status = node_status.decode()
+                if current_status is None:
+                    current_status = node_status
+                elif current_status == "abort" and node_status == "restart":
+                    current_status = "restart"
+            if current_status is not None and not isinstance(node_status, str):
                 current_status = current_status.decode()
             should_restart = current_status == "restart"
             cleanup_dynapipe_job(args)
@@ -1427,7 +1422,8 @@ def run_best_config(args):
                 kv.barrier()
                 if args.node_rank == 0:
                     # reset the status
-                    kv.set(spec_basename + "status", "running")
+                    for i in range(args.nnodes):
+                        kv.set(spec_basename + f"status_{i}", "running")
                 kv.barrier()
         if args.enable_dynapipe:
             current_args.dynapipe_device_memory_limit = initial_memlimit
@@ -1448,7 +1444,6 @@ def _parse_args():
     parser.add_argument(
         "--model_type",
         type=str,
-        required=True,
         choices=["t5", "gpt"],
         help="Type of model to benchmark on.",
     )
@@ -1460,32 +1455,48 @@ def _parse_args():
     parser, exp_group = _add_experiment_args(parser)
     args = parser.parse_args()
 
-    # if experiment config exists, load it
-    if args.experiment_name.endswith("_spp"):
-        args.dynapipe_enable_packing = True
+    # fill in model type
+    if args.model_type is None:
+        if args.experiment_name.startswith("gpt"):
+            args.model_type = "gpt"
+        elif args.experiment_name.startswith("t5"):
+            args.model_type = "t5"
+        else:
+            raise ValueError(
+                "Cannot infer model type from experiment name: {}".format(
+                    args.experiment_name
+                )
+            )
+    # load detailed spec from config file
+    if args.experiment_name.endswith("_grid"):
+        # grid search
+        args.experiment_type = "grid_search"
+        raw_config_name = args.experiment_name[:-5]
         config_name = args.experiment_name[:-4] + ".json"
     elif args.experiment_name.endswith("_best"):
+        # run full benchmark on the best grid searched config
+        args.experiment_type = "best_throughput"
         raw_config_name = args.experiment_name[:-5]
-        if raw_config_name.endswith("_spp"):
-            args.dynapipe_enable_packing = True
-            raw_config_name = raw_config_name[:-4]
         config_name = raw_config_name + ".json"
-        args.run_best_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
-        print_fn("Using best config: {}".format(args.run_best_config))
+        args.run_config = os.path.join(BEST_CONFIG_DIR, raw_config_name + ".jsonl")
+        print_fn("Using best config: {}".format(args.run_config))
     elif args.experiment_name.endswith("_abl"):
+        # ablation study
+        args.experiment_type = "ablation"
         raw_config_name = args.experiment_name[:-4]
-        if raw_config_name.endswith("_spp"):
-            raise ValueError("Ablation experiment should not use spp")
         config_name = raw_config_name + ".json"
-        args.run_best_config = os.path.join(ABLATION_CONFIG_DIR, raw_config_name + ".jsonl")
-        print_fn("Using ablation config: {}".format(args.run_best_config))
+        args.run_config = os.path.join(ABLATION_CONFIG_DIR, raw_config_name + ".jsonl")
+        print_fn("Using ablation config: {}".format(args.run_config))
     elif args.experiment_name.endswith("_control"):
+        # controlled baselines (MLM+DS (c))
+        args.experiment_type = "controlled_baseline"
         raw_config_name = args.experiment_name[:-8]
-        assert not raw_config_name.endswith("_spp"), "Controled baseline experiment must not be spp"
         config_name = raw_config_name + ".json"
-        args.run_best_config = os.path.join(CONTROLLED_CONFIG_DIR, raw_config_name + ".jsonl")
-        print_fn("Using controlled config: {}".format(args.run_best_config))
+        args.run_config = os.path.join(CONTROLLED_CONFIG_DIR, raw_config_name + ".jsonl")
+        print_fn("Using controlled config: {}".format(args.run_config))
     else:
+        # other experiments
+        args.experiment_type = "other"
         config_name = args.experiment_name + ".json"
     config_path = os.path.join(EXP_CONFIG_DIR, config_name)
     print_fn(f"Loading experiment config from {config_path}")
@@ -1531,8 +1542,8 @@ def _parse_args():
     # are going to search through
     training_optional_args = []
     dynapipe_optional_args = ["dynapipe_enable_packing", "dynapipe_limit_rc_type"]
-    if args.batch_experiments or args.run_best_config:
-        if args.batch_experiments:
+    if args.grid_experiments or args.run_config:
+        if args.grid_experiments:
             assert (
                 args.sequence_length_range is not None
             ), "Must specify sequence length range when running experiments in batch."
@@ -1587,7 +1598,7 @@ def _parse_args():
     # check args
     args = _check_cluster_args(args)
 
-    if args.batch_experiments or args.run_best_config:
+    if args.grid_experiments or args.run_config:
         # training and logging args are generated for each experiment
         return args, None, False
     else:
@@ -1603,16 +1614,6 @@ def _get_shell_script(args):
         pipeline_args = (
             f"--pipeline-model-parallel-split-rank {args.pp_split_rank}"
         )
-        # if args.enable_dynapipe:
-        #     n_encoder_layers_per_device = args.encoder_num_layers // (args.pipeline_parallel_size // 2)
-        #     n_decoder_layers_per_device = args.decoder_num_layers // (args.pipeline_parallel_size // 2)
-        #     assert n_encoder_layers_per_device == n_decoder_layers_per_device, (
-        #         "Different number of layers per device for encoder and decoder "
-        #         "is not supported."
-        #     )
-        #     pipeline_args += (
-        #         f" --num-layers-per-virtual-pipeline-stage {n_encoder_layers_per_device}"
-        #     )
     else:
         pipeline_args = ""
     # construct recompute args
@@ -1707,11 +1708,13 @@ def main():
     if should_skip:
         print_fn("Experiment directory already exists, skipping.")
         return
-    if args.batch_experiments:
-        run_batch_experiments(args)
-    elif args.run_best_config:
-        run_best_config(args)
+    if args.grid_experiments:
+        run_grid_experiments(args)
+    elif args.run_config:
+        # read a config (.jsonl) file and run experiments in it
+        run_config(args)
     else:
+        # manually specify experiment specs
         args = _create_deepspeed_config(args, exp_logging_dir)
         # get shell script
         shell_script = _get_shell_script(args)

@@ -7,10 +7,15 @@ import jsonlines
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--exp_dir', type=str, default="./experiments")
-parser.add_argument("--output_file", type=str, default="./experiment_results/final_exp_stats.jsonl")
+parser.add_argument('--exp_dir', type=str, required=True, help="Path to the experiment sub-directory, e.g., ../experiments/best_throughput")
+parser.add_argument("--output_file", type=str, help="Path to the output file, default to exp dir name + .jsonl")
 
 args = parser.parse_args()
+
+assert os.path.isdir(args.exp_dir)
+if args.output_file is None:
+    args.output_file = args.exp_dir.rstrip("/") + ".jsonl"
+print("Writing results to {}".format(args.output_file))
 
 def get_num_tokens(enc_mapping, dec_mapping, max_seqlen, model_type="gpt"):
     enc_seqlens = enc_mapping[:, 2]
@@ -44,8 +49,8 @@ def find_last_datetime_in_file(filename):
 # 4. Number of iterations executed
 with jsonlines.open(args.output_file, mode='w') as writer:
     for exp_name in os.listdir(args.exp_dir):
-        if not ("bug" in exp_name or exp_name.endswith("abl")) and os.path.isdir(os.path.join(args.exp_dir, exp_name)):
-            exp_full_path = os.path.join(args.exp_dir, exp_name)
+        exp_full_path = os.path.join(args.exp_dir, exp_name)
+        if os.path.isdir(exp_full_path):
             for spec_name in os.listdir(exp_full_path):
                 log_file = os.path.join(exp_full_path, spec_name, "stdout_stderr.log")
                 if "gpt" in exp_name:
@@ -62,7 +67,8 @@ with jsonlines.open(args.output_file, mode='w') as writer:
                     contents = f.read()
                     if ("after training is done" in contents or 
                         "Taking poison pill..." in contents or 
-                        "Training finished successfully." in contents):
+                        "Training finished successfully." in contents or 
+                        "StopIteration" in contents):
                         # this experiment finished successfully
                         pass
                     else:
@@ -101,7 +107,7 @@ with jsonlines.open(args.output_file, mode='w') as writer:
                     "exp_name": exp_name,
                     "spec_name": spec_name,
                     "num_tokens": int(total_tokens),
-                    "avg_iter_time": float(np.mean(per_iter_times[2:])),
+                    "avg_iter_time": float(np.mean(per_iter_times[2:])), # exclude the first 20 iters (warmup)
                     "num_iters": max_iter,
                     "start_time": start_dt.timestamp()*1000,
                     "end_time": end_dt.timestamp()*1000

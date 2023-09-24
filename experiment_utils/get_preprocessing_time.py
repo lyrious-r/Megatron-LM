@@ -21,7 +21,6 @@ with open(args.out, 'w') as f:
                 esl = int(spec_name.split('_')[3][2:])
                 dsl = 0
                 gbs = int(spec_name.split('_')[4][3:])
-            spp = "spp" in spec_name
             # read log file to determine if it is a successful run
             stdout_stderr_fn = "stdout_stderr.log"
             if not os.path.isfile(os.path.join(exp_full_path, spec_name, stdout_stderr_fn)):
@@ -39,5 +38,5 @@ with open(args.out, 'w') as f:
                             if "EP generation for iteration" in line:
                                 time = float(line.split()[-2])
                                 iteration = int(line.split()[-4])
-                                f.write(f"{exp_name},{esl},{dsl},{gbs},{spp},{iteration},{time}\n")
+                                f.write(f"{exp_name},{esl},{dsl},{gbs},{iteration},{time}\n")
 

@@ -6,11 +6,14 @@ import os
 from collections import defaultdict
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--exp_dir', type=str, default="./experiments")
-parser.add_argument("--output_file", type=str, default="./experiment_results/padding_efficiency.jsonl")
+parser.add_argument('--exp_dir', type=str, required=True, help="Path to the experiment sub-directory, e.g., ../experiments/best_throughput")
+parser.add_argument("--output_file", type=str, help="Path to the output file, default to exp dir name + _batch_eff.jsonl")
 
 args = parser.parse_args()
-
+assert os.path.isdir(args.exp_dir)
+if args.output_file is None:
+    args.output_file = args.exp_dir.rstrip("/") + "_batch_eff.jsonl"
+print("Writing results to {}".format(args.output_file))
 
 def get_batching_efficiency(max_enc_seqlen, max_dec_seqlen, dir):
     if "dynapipe" in dir:
@@ -79,8 +82,6 @@ def get_batching_efficiency(max_enc_seqlen, max_dec_seqlen, dir):
 
 with jsonlines.open(args.output_file, "w") as writer:
     for exp_name in os.listdir(args.exp_dir):
-        if "bug" in exp_name or "abl" in exp_name:
-            continue
         if not os.path.isdir(os.path.join(args.exp_dir, exp_name)):
             continue
         for spec_name in os.listdir(os.path.join(args.exp_dir, exp_name)):
@@ -88,9 +89,10 @@ with jsonlines.open(args.output_file, "w") as writer:
             log_file = os.path.join(spec_path, "stdout_stderr.log")
             with open(log_file, "r") as f:
                 contents = f.read()
-                if ("after training is done" in contents or 
-                    "Taking poison pill..." in contents or 
-                    "Training finished successfully." in contents):
+                if ("after training is done" in contents or
+                    "Taking poison pill..." in contents or
+                    "Training finished successfully." in contents or
+                    "StopIteration" in contents):
                     # this experiment finished successfully
                     pass
                 else:
