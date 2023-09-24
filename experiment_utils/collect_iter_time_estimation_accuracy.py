@@ -5,11 +5,19 @@ import numpy as np
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-i', '--exp_dir', type=str, default='./experiments')
-parser.add_argument('-eo', '--est_out', type=str, default='./experiment_results/estimated_iter_time.csv')
-parser.add_argument('-ao', '--act_out', type=str, default='./experiment_results/all_iter_times.csv')
+parser.add_argument('--exp_dir', type=str, required=True, help="Path to the experiment sub-directory, e.g., ../experiments/best_throughput")
+parser.add_argument("--output_file_prefix", type=str, help="Path prefix to the output files. Two files will be generated: "
+                                                           "<prefix>_iter_time_estimated.csv, <prefix>_iter_time_actual.csv. "
+                                                            "Default to exp dir name.")
 
 args = parser.parse_args()
+assert os.path.isdir(args.exp_dir)
+if args.output_file_prefix is None:
+    args.output_file_prefix = args.exp_dir.rstrip("/")
+
+est_out = args.output_file_prefix + "_iter_time_estimated.csv"
+act_out = args.output_file_prefix + "_iter_time_actual.csv"
+print("Writing results to {} and {}".format(est_out, act_out))
 
 def get_iter_time(fn: str):
     times = []
@@ -24,9 +32,9 @@ def get_iter_time(fn: str):
         return float("inf")
     return np.mean(times[2:]) # skip first 20 iteration as warmup
 
-with open(args.est_out, 'w') as est_f:
+with open(est_out, 'w') as est_f:
     est_f.write("exp_name,spec_name,dpg,iteration,estimated_time\n")
-    with open(args.act_out, 'w') as act_f:
+    with open(act_out, 'w') as act_f:
         act_f.write("exp_name,spec_name,measured_time\n")
         for exp_name in tqdm(os.listdir(args.exp_dir), desc="Experiments"):
             exp_full_path = os.path.join(args.exp_dir, exp_name)

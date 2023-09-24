@@ -1487,6 +1487,12 @@ def _parse_args():
         config_name = raw_config_name + ".json"
         args.run_config = os.path.join(ABLATION_CONFIG_DIR, raw_config_name + ".jsonl")
         print_fn("Using ablation config: {}".format(args.run_config))
+    elif args.experiment_name.endswith("_ablgrid"):
+        args.experiment_type = "ablation_grid"
+        raw_config_name = args.experiment_name[:-8]
+        config_name = raw_config_name + ".json"
+        args.run_config = os.path.join(ABLATION_CONFIG_DIR, raw_config_name + "_ablgrid.jsonl")
+        print_fn("Using ablation grid config: {}".format(args.run_config))
     elif args.experiment_name.endswith("_control"):
         # controlled baselines (MLM+DS (c))
         args.experiment_type = "controlled_baseline"
