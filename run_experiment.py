@@ -17,7 +17,7 @@ import redis
 
 BEST_CONFIG_DIR = "./experiment_configs/best_configs"
 ABLATION_CONFIG_DIR = "./experiment_configs/ablation_configs"
-CONTROLLED_CONFIG_DIR = "./experiment_configs/baseline_controlled_configs"
+CONTROLLED_CONFIG_DIR = "./experiment_configs/control_configs"
 EXP_CONFIG_DIR = "./experiment_configs"
 TEMPLATE_PATH = os.path.join(EXP_CONFIG_DIR, "finetune_{}.template")
 DEEPSPEED_TEMPLATE_PATH = os.path.join(
@@ -1264,7 +1264,6 @@ def run_grid_experiments(args):
                     for i in range(args.nnodes):
                         kv.set(spec_basename + f"status_{i}", "running")
                 kv.barrier()
-        print_fn("Exchanging status for experiment {}.".format(current_exp_config))
         # check current experiment status
         current_exp_config.status = ExperimentConfig.parse_experiment_status(
             exp_logging_dir
@@ -1471,8 +1470,9 @@ def _parse_args():
     if args.experiment_name.endswith("_grid"):
         # grid search
         args.experiment_type = "grid_search"
+        args.grid_experiments = True
         raw_config_name = args.experiment_name[:-5]
-        config_name = args.experiment_name[:-4] + ".json"
+        config_name = args.experiment_name[:-5] + ".json"
     elif args.experiment_name.endswith("_best"):
         # run full benchmark on the best grid searched config
         args.experiment_type = "best_throughput"

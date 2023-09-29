@@ -9,8 +9,8 @@ from dataclasses import dataclass
 import torch
 from tqdm import tqdm
 
-from run_single_gpu_benchmark_gpt import run_benchmark as run_benchmark_gpt
-from run_single_gpu_benchmark_t5 import run_benchmark as run_benchmark_t5
+from gpt_microbenchmark_wrapper import run_benchmark as run_benchmark_gpt
+from t5_microbenchmark_wrapper import run_benchmark as run_benchmark_t5
 
 
 def parse_args():
