@@ -24,16 +24,18 @@ The hierarchy follows that of the original Megatron-LM repository. We highlight 
 |  :contains config files which specify various parameters read
 |   by experiment scripts
 |
+|--experiment_scripts
+|  :contains scripts for running the experiments
+|
 |--experiment_utils
 |  :utility scripts for collecting experiment logs and generating
 |   figures in the paper
 |
-|--experiment_scripts
-|  :contains scripts for running the experiments
-|
 |--experiments
 |  : (to be generated) contains the logs and statistics generated
 |    by the experiments
+|
+...
 |
 |--megatron
 |  |--data
@@ -50,6 +52,8 @@ The hierarchy follows that of the original Megatron-LM repository. We highlight 
 |--reproduced_figures
 |  : (to be generated) contains the figures reproduced by the
 |    experiments
+|
+...
 |
 |--microbenchmark_gpt.py
 |--microbenchmark_t5.py
