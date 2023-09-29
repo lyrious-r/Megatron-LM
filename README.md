@@ -11,8 +11,9 @@ The hierarchy follows that of the original Megatron-LM repository. We highlight 
 |--cost_models
 |  :contains pre-generated cost models for gpt_7.6b and t5_11b
 |
-|--datasets 
-|  :contains pre-processed datasets needed for the experiments
+|--datasets
+|  : (to be generated) contains pre-processed datasets needed 
+|    for the experiments
 |
 |--docker
 |  :contains the Dockerfile and supporting scripts for setting
@@ -30,6 +31,10 @@ The hierarchy follows that of the original Megatron-LM repository. We highlight 
 |--experiment_scripts
 |  :contains scripts for running the experiments
 |
+|--experiments
+|  : (to be generated) contains the logs and statistics generated
+|    by the experiments
+|
 |--megatron
 |  |--data
 |  |   |--data_samplers.py
@@ -42,11 +47,15 @@ The hierarchy follows that of the original Megatron-LM repository. We highlight 
 |  |--pipeline_executor.py
 |     :implements DynaPipe pipeline instructions
 |
+|--reproduced_figures
+|  : (to be generated) contains the figures reproduced by the
+|    experiments
+|
 |--microbenchmark_gpt.py
 |--microbenchmark_t5.py
 |--gpt_microbenchmark_wrapper.py
 |--t5_microbenchmark_wrapper.py
-|--run_cost_mode_benchmarks.py
+|--run_cost_model_benchmarks.py
 |  :these files are used for generating the cost models
 |
 |--run_experiment.py
@@ -64,7 +73,7 @@ Please use the Dockerfile to setup the environment.
 
 Main software dependencies include:
 * PyTorch (>= 2.1.0)
-* [DynaPipe](https://github.com/chenyu-jiang/plopt)
+* [DynaPipe](https://github.com/chenyu-jiang/DynaPipe)
 * Megatron-LM (this repo)
 * A slightly modified version of DeepSpeed: [https://github.com/chenyu-jiang/DeepSpeed](https://github.com/chenyu-jiang/DeepSpeed). We removed a timer that introduce unnecessary synchronization which disrupts our schedule and disabled overflow checking for more consistent throughput measurement.
 
