@@ -1,6 +1,6 @@
 ## Artifact for DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines
 
-This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of DynaPipe can be found at [DynaPipe](https://github.com/chenyu-jiang/plopt).
+This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of DynaPipe can be found at [DynaPipe](https://github.com/chenyu-jiang/DynaPipe).
 
 This repository is based on a fork of [Megatron-LM](https://github.com/NVIDIA/Megatron-LM). Main modifications include adding support for packing in the dataloader, implementing the pipeline instructions for DynaPipe, and adding the scripts for running the experiments.
 
@@ -87,7 +87,8 @@ Please check the Dockerfile for how to install these packages.
 
 Run the following commands to build the container image:
 ```bash
-cd docker
+git clone https://github.com/chenyu-jiang/Megatron-LM.git
+cd Megatron-LM/docker
 ./build_image.sh
 ```
 (Note: for artifact evaluation, the provided machine already contain a pre-built image.)
@@ -96,7 +97,7 @@ To create a container, run (inside the docker directory):
 ```bash
 ./run.sh
 ```
-You will find this repository at `/root/Megatron-LM`.
+You will find this repository at `/root/Megatron-LM` inside the container.
 
 ## Dataset Preparation
 Our experiments used the FLAN dataset. Due to its size, the download process can take 12+ hours (depending on network speed). The download process is also prone to errors and availability issues caused by version mismatch between `tf-dataset` and the downloading code. To reduce time for artifact evaluation, we also include a pre-processed version of the dataset in the provided machine.
@@ -138,6 +139,8 @@ cp /root/text-to-text-transfer-transformer/*.bin /root/text-to-text-transfer-tra
 ```
 
 ## One-line command for all experiments
+Note: all the following commands (and commands in later sections) should be executed inside the container under the `/root/Megatron-LM` directory.
+
 We provide a script for running all experiments at once. To do this, run the following commands in the container:
 ```bash
 ./experiment_scripts/run_all.sh

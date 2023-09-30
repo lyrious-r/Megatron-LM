@@ -68,7 +68,7 @@ RUN cd $HOME \
 RUN cd $HOME \
     && git clone -b mlm_exp https://github.com/chenyu-jiang/DeepSpeed.git \
     && cd DeepSpeed \
-    && DS_BUILD_OPS=1 DS_BUILD_AIO=0 DS_BUILD_SPARSE_ATTN=0 pip install -e .
+    && DS_BUILD_OPS=1 DS_BUILD_AIO=0 DS_BUILD_SPARSE_ATTN=0 DS_BUILD_SPATIAL_INFERENCE=0 pip install -e .
 
 # sed through source code to remove torch._six import
 RUN cd $HOME \
