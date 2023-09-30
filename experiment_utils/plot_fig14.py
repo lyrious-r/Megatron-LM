@@ -66,7 +66,7 @@ for model in MODELS:
 
     hue_order = ["baseline", "dynapipe"] if model == "GPT" else ["baseline (Encoder)", "baseline (Decoder)", "dynapipe (Encoder)", "dynapipe (Decoder)"]
 
-    palette = sns.color_palette() if model == "GPT" else sns.color_palette("Paired", 6)
+    palette = sns.color_palette(n_colors=2) if model == "GPT" else sns.color_palette("Paired", 4)
     hatches = ['//', 'xx', '--', '..', "||", "++"]
     seqlen_range = sorted(model_df["seqlen"].unique())
     def add_cross_at(ax: plt.Axes, x, hue, size=80, y_offset=500):
@@ -137,7 +137,7 @@ for model in MODELS:
 
     hue_order = ["baseline", "dynapipe"] if model == "GPT" else ["baseline (Encoder)", "baseline (Decoder)", "dynapipe (Encoder)", "dynapipe (Decoder)"]
 
-    palette = sns.color_palette() if model == "GPT" else sns.color_palette("Paired", 6)
+    palette = sns.color_palette(n_colors=2) if model == "GPT" else sns.color_palette("Paired", 4)
     hatches = ['//', 'xx', '--', '..', "||", "++"]
     gbs_range = sorted(model_df["global_batch_size"].unique())
     def add_cross_at(ax: plt.Axes, x, hue, size=80, y_offset=500):

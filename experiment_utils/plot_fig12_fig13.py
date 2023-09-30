@@ -45,7 +45,6 @@ df["throughput"] = df.apply(calculate_throughput, axis=1)
 FIG12_GLOBAL_BATCH_SIZE = 65536
 FIG13_SEQLEN = 2048
 HUE_ORDER = ["baseline (c)", "baseline", "dynapipe"]
-PALETTE = sns.color_palette()
 HATCHES = ['//', 'xx', '--', '..']
 
 # function to draw a cross in the bar plot for missing data (e.g., OOM)
@@ -62,7 +61,7 @@ def draw_fig12(df, ouput_prefix):
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
 
-    sns.barplot(x='seqlen', y='throughput', hue='framework', data=fig12_df, ax=ax, orient='v', hue_order=HUE_ORDER, palette=PALETTE)
+    sns.barplot(x='seqlen', y='throughput', hue='framework', data=fig12_df, ax=ax, orient='v', hue_order=HUE_ORDER)
 
     # draw crosses for missing data
     y_offset = ax.get_ylim()[1] * 0.04
@@ -103,7 +102,7 @@ def draw_fig13(df, ouput_prefix):
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
 
     # ax.set_title(f'Max Sequence Length: {gbs_range_seqlen}')
-    sns.barplot(x='global_batch_size', y='throughput', hue='framework', data=fig13_df, ax=ax, orient='v', hue_order=HUE_ORDER, palette=PALETTE)
+    sns.barplot(x='global_batch_size', y='throughput', hue='framework', data=fig13_df, ax=ax, orient='v', hue_order=HUE_ORDER)
 
     # draw crosses for missing data
     y_offset = ax.get_ylim()[1] * 0.04

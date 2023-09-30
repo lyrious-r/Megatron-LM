@@ -6,5 +6,5 @@ python3 run_experiment.py --experiment_name t5_11b_24l_baseline_mid_abl
 python3 run_experiment.py --experiment_name t5_11b_24l_dynapipe_mid_abl
 
 # collect results
-python3 collect_throughput_stats.py --exp_dir ./experiments/ablation
-python3 collect_throughput_stats.py --exp_dir ./experiments/ablation_grid
+python3 ./experiment_scripts/collect_throughput_stats.py --exp_dir ./experiments/ablation
+python3 ./experiment_scripts/collect_throughput_stats.py --exp_dir ./experiments/ablation_grid

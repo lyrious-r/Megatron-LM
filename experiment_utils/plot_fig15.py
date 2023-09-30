@@ -102,7 +102,7 @@ scheduling_df["throughput"] = scheduling_df.groupby('Global Batch Size')["throug
 # fig15a
 fig, ax = plt.subplots(figsize=(4, 4))
 
-sns.barplot(data=batching_df, x="Type", y="throughput", ax=ax, orient='v')
+sns.barplot(data=batching_df, x="Type", y="throughput", hue="Type", ax=ax, orient='v')
 ax.xaxis.set_tick_params(labelsize=12)
 ax.yaxis.set_tick_params(labelsize=12)
 ax.set_ylabel("Throughput (tokens/s)", fontsize=16)

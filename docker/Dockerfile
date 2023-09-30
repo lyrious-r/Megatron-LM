@@ -99,7 +99,7 @@ RUN cd $HOME \
 
 RUN TMPDIR=/var/tmp python3 -m pip install --cache-dir=$TMPDIR nltk
 RUN TMPDIR=/var/tmp python3 -m pip install --upgrade requests
-RUN TMPDIR=/var/tmp python3 -m pip install --cache-dir=$TMPDIR pybind11 jsonlines pillow
+RUN TMPDIR=/var/tmp python3 -m pip install --cache-dir=$TMPDIR pybind11 jsonlines pillow pandas matplotlib seaborn
 
 # install nsight systems
 RUN apt-get install -y cuda-nsight-systems-11-7
