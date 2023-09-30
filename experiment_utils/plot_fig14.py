@@ -2,6 +2,7 @@ import argparse
 
 import os
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -27,12 +28,18 @@ df = pd.read_json(args.batch_eff_data, lines=True)
 df = augment_df(df)
 
 def calc_enc_eff(row):
-    return row["enc_tokens"] / row["enc_padded_tokens"]
+    if np.isnan(row["enc_eff"]):
+        return row["enc_tokens"] / row["enc_padded_tokens"]
+    else:
+        return row["enc_eff"]
 
 def calc_dec_eff(row):
-    if row["dec_tokens"] == 0.0:
-        return 0
-    return row["dec_tokens"] / row["dec_paddded_tokens"]
+    if np.isnan(row["dec_eff"]):
+        if row["dec_tokens"] == 0.0:
+            return 0
+        return row["dec_tokens"] / row["dec_paddded_tokens"]
+    else:
+        return row["dec_eff"]
 
 df["enc_eff"] = df.apply(calc_enc_eff, axis=1)
 df["dec_eff"] = df.apply(calc_dec_eff, axis=1)

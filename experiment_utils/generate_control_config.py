@@ -45,6 +45,9 @@ def control_filter(row):
         return False
 
 control_df = df[df.apply(control_filter, axis=1)].copy()
+
+import code
+code.interact(local=locals())
 # select the best config for each experiment
 control_df = control_df.loc[control_df.groupby(["exp_name", "seqlen", "global_batch_size"])["avg_iter_time"].idxmin()]
 

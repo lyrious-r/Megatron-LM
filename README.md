@@ -98,20 +98,13 @@ To create a container, run (inside the docker directory):
 ```
 You will find this repository at `/root/Megatron-LM`.
 
-## One-click script for experiments
-We provide a one-click script for running all experiments. To run all experiments at once, run the following commands in the container:
-```bash
-./experiment_scripts/run_all.sh
-```
-The reproduced figures will be in the `/root/Megatron-LM/reproduced_figures` directory.
-The following sections describe the steps to manually run each experiment in detail.
-
 ## Dataset Preparation
-Our experiments used the FLAN dataset. Due to its size, the download process can take 12+ hours (depending on network speed). The download process is also prone to errors and availability issues caused by version mismatch between `tf-dataset` and the downloading code. To reduce evaluation time, we also provide a pre-processed and down-sampled version of the dataset.
+Our experiments used the FLAN dataset. Due to its size, the download process can take 12+ hours (depending on network speed). The download process is also prone to errors and availability issues caused by version mismatch between `tf-dataset` and the downloading code. To reduce time for artifact evaluation, we also include a pre-processed version of the dataset in the provided machine.
 
-(Please use this for artifact evaluation) To download the preprocessed datasets to the `datasets` directory, run:
+(For artifact evaluation) To copy the preprocessed datasets into the `datasets` directory, run outside the container:
 ```bash
-./experiment_scripts/download_preprocessed_dataset.sh
+cd ~/preprocessed_datasets
+docker cp datasets dynapipe:/root/Megatron-LM
 ```
 
 To generate the dataset from scratch, follow the following steps:
@@ -144,6 +137,14 @@ cd /root/Megatron-LM
 cp /root/text-to-text-transfer-transformer/*.bin /root/text-to-text-transfer-transformer/*.idx /root/Megatron-LM/datasets
 ```
 
+## One-line command for all experiments
+We provide a script for running all experiments at once. To do this, run the following commands in the container:
+```bash
+./experiment_scripts/run_all.sh
+```
+The reproduced figures will be in the `/root/Megatron-LM/reproduced_figures` directory.
+The following sections describe the steps to manually run each experiment in detail.
+
 ## Cost Model Generation
 DynaPipe needs cost models to optimally generate micro-batches and compute pipeline schedule. These cost models are generated through profiling the model under different micro-batch sizes and sequence lengths. Since we benchmark multiple models and grid search for the optimal parallelism in the experiments, we needs to generate multiple cost models and such process can be slow on a single p4d node (12+ hours). We provide pre-generated cost models for the GPT-7.6B and T5-11B models in the `cost_models` directory.
 
@@ -156,7 +157,7 @@ DynaPipe needs cost models to optimally generate micro-batches and compute pipel
 ### Grid search
 In this step, we grid search for the best parallelism for both baseline (Megatron-LM) and DynaPipe. For baselines, we also grid search for the optimal micro-batch size and recomputation (gradient checkpointing) strategy. Due to the large number of experiments, this step can take ~50 hours to complete on a single p4d node. Therefore we also provide the results of the grid search (best configurations) in the `experiment_configs/best_configs` directory and the controlled config (i.e., where we use the same parallelism of DynaPipe to run the baseline) in the `experiment_configs/control_configs` directory.
 
-To run the grid search from scratch, run:
+(Skippable for artifact evaluation) To run the grid search from scratch, run:
 ```bash
 # make a copy of the best_configs directory
 mv ./experiment_configs/best_configs ./experiment_configs/best_configs_backup
@@ -176,7 +177,7 @@ To run the experiments, run:
 ```
 The benchmarking takes about 18 hours to complete. This will generate `best_throughput.jsonl` and `controlled_baseline.jsonl` containing the throughput results in `experiments` directory. To regenerate figure 12 and figure 13, run:
 ```bash
-python3 ./experiment_utils/plot_fig12_fig13.py --best_throughput_data ./experiments/best_throughput.jsonl --controlled_throughput_data ./experiments/controlled_baseline.jsonl --out_dir ./reproduced_figures
+./experiment_scripts/generate_figure_12_13.sh
 ```
 
 The generated figures will be in the `reproduced_figures` directory.
@@ -184,10 +185,7 @@ The generated figures will be in the `reproduced_figures` directory.
 ### Fig.14
 Fig.14 compares the batching efficiency of DynaPipe and baseline. Such statistics are collected during the benchmarking process. To generate the figure, run:
 ```bash
-# collect the statistics from logs. this command will generate ./experiments/best_throughput_batch_eff.jsonl
-python3 ./experiment_utils/collect_batching_efficiency_stats.py --exp_dir ./experiments/best_throughput
-# plot the figure
-python3 ./experiment_utils/plot_fig14.py --batch_eff_data ./experiments/best_throughput_batch_eff.jsonl --out_dir ./reproduced_figures
+./experiment_scripts/generate_figure_14.sh
 ```
 
 ### Fig.15
@@ -199,28 +197,19 @@ The ablation experiments takes about 8 hours to complete. Results will be saved 
 
 To generate the figure, run:
 ```bash
-python3 ./experiment_utils/plot_fig15.py --ablation_data ./experiments/ablation.jsonl ./experiments/ablation_grid.jsonl --out_dir ./reproduced_figures
+./experiment_scripts/generate_figure_15.sh
 ```
 
 ### Fig.16
 Fig.16 shows the execution time for DynaPipe. The statistics are also collected during the benchmarking process when reproducing Fig.12 and 13. To generate the figure, run:
 ```bash
-# collect the statistics from logs. this command will generate ./experiments/best_throughput_planning_time.csv
-python3 ./experiment_utils/collect_planning_time.py --exp_dir ./experiments/best_throughput
-# plot the figure
-python3 ./experiment_utils/plot_fig16.py --planning_time_data ./experiments/best_throughput_planning_time.csv --out_dir ./reproduced_figures
+./experiment_scripts/generate_figure_16.sh
 ```
 (Note: since we did not run benchmark on more than 1 p4d nodes, the planning time distribution in the generated figure is expected to be slightly different from the original paper.)
 
 ### Fig.17
 Fig.17 shows the prediction accuracy of DynaPipe's cost models. The memory and iteration time data is collected through the benchmark, which are compared against the predictions. To generate the figure, run:
 ```bash
-# collect the iteration time statistics from logs. this command will generate ./experiments/best_throughput_iter_time_actual.csv and ./experiments/best_throughput_iter_time_estimated.csv
-python3 ./experiment_utils/collect_iter_time_estimation_accuracy.py --exp_dir ./experiments/best_throughput
-# collect the memory statistics from logs. this command will generate ./experiments/best_throughput_memory_actual.csv and ./experiments/best_throughput_memory_estimated.csv
-python3 ./experiment_utils/collect_memory_estimation_accuracy.py --exp_dir ./experiments/best_throughput
-# plot the figure
-python3 ./experiment_utils/plot_fig17_a.py --data_prefix ./experiments/best_throughput --out_dir ./reproduced_figures
-python3 ./experiment_utils/plot_fig17_b.py --data_prefix ./experiments/best_throughput --out_dir ./reproduced_figures
+./experiment_scripts/generate_figure_17.sh
 ```
 
