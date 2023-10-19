@@ -1,6 +1,6 @@
 ## Artifact for DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines
 
-This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of DynaPipe can be found at [DynaPipe](https://github.com/chenyu-jiang/DynaPipe).
+This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of DynaPipe can be found at [DynaPipe](https://github.com/chenyu-jiang/EuroSys24-AE-Spring-92).
 
 This repository is based on a fork of [Megatron-LM](https://github.com/NVIDIA/Megatron-LM). Main modifications include adding support for packing in the dataloader, implementing the pipeline instructions for DynaPipe, and adding the scripts for running the experiments.
 
@@ -77,7 +77,7 @@ Please use the Dockerfile to setup the environment.
 
 Main software dependencies include:
 * PyTorch (>= 2.1.0)
-* [DynaPipe](https://github.com/chenyu-jiang/DynaPipe)
+* [DynaPipe](https://github.com/chenyu-jiang/EuroSys24-AE-Spring-92)
 * Megatron-LM (this repo)
 * A slightly modified version of DeepSpeed: [https://github.com/chenyu-jiang/DeepSpeed](https://github.com/chenyu-jiang/DeepSpeed). We removed a timer that introduce unnecessary synchronization which disrupts our schedule and disabled overflow checking for more consistent throughput measurement.
 
