@@ -2,7 +2,7 @@
 
 This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of the paper can be found [here](https://github.com/awslabs/optimizing-multitask-training-through-dynamic-pipelines).
 
-This repository is based on a fork of [Megatron-LM](https://github.com/NVIDIA/Megatron-LM). Main modifications include adding support for packing in the dataloader, implementing the pipeline instructions for DynaPipe, and adding the scripts for running the experiments.
+This repository is based on a fork of [Megatron-LM](https://github.com/NVIDIA/Megatron-LM). Main modifications include adding support for packing in the dataloader, implementing the pipeline instructions for DynaPipe, and adding the scripts for running the experiments. (Note: we did not set up the attention masks to eliminate cross-contanmination between packed samples since it will not affect throughput.)
 
 ## Directory Hierachy
 The hierarchy follows that of the original Megatron-LM repository. We highlight the modifications below
