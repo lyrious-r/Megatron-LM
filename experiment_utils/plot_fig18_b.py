@@ -62,4 +62,4 @@ ax.text(18000, 36000, f"GPT: {gpt_avg_error.mean() * 100:.2f}%", fontsize=12)
 plt.setp(ax.get_legend().get_texts(), fontsize='12') # for legend text
 plt.setp(ax.get_legend().get_title(), fontsize='12') # for legend title
 
-fig.savefig(os.path.join(args.out_dir, "fig17_b.pdf"), bbox_inches="tight")
+fig.savefig(os.path.join(args.out_dir, "fig18_b.pdf"), bbox_inches="tight")

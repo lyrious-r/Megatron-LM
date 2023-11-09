@@ -42,8 +42,8 @@ def calculate_throughput(row):
 df["throughput"] = df.apply(calculate_throughput, axis=1)
 
 # some global constants for plotting
-FIG12_GLOBAL_BATCH_SIZE = 65536
-FIG13_SEQLEN = 2048
+FIG13_GLOBAL_BATCH_SIZE = 65536
+FIG14_SEQLEN = 2048
 HUE_ORDER = ["baseline (c)", "baseline", "dynapipe"]
 HATCHES = ['//', 'xx', '--', '..']
 
@@ -54,14 +54,14 @@ def add_cross_at(ax: plt.Axes, x_index, hue, size=80, y_offset=500):
     hue_offset = (-(len(HUE_ORDER) / 2) + 0.5 + hue_index) * ax.patches[0].get_width()
     ax.scatter(x_index + hue_offset, y_offset, marker='x', color='red', s=size)
 
-def draw_fig12(df, ouput_prefix):
-    # Fig 12: fix global batch size, vary sequence length
-    fig12_df = df[(df['global_batch_size'] == FIG12_GLOBAL_BATCH_SIZE)]
-    seqlen_range = sorted(fig12_df["seqlen"].unique())
+def draw_fig13(df, ouput_prefix):
+    # Fig 13: fix global batch size, vary sequence length
+    fig13_df = df[(df['global_batch_size'] == FIG13_GLOBAL_BATCH_SIZE)]
+    seqlen_range = sorted(fig13_df["seqlen"].unique())
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
 
-    sns.barplot(x='seqlen', y='throughput', hue='framework', data=fig12_df, ax=ax, orient='v', hue_order=HUE_ORDER)
+    sns.barplot(x='seqlen', y='throughput', hue='framework', data=fig13_df, ax=ax, orient='v', hue_order=HUE_ORDER)
 
     # draw crosses for missing data
     y_offset = ax.get_ylim()[1] * 0.04
@@ -69,7 +69,7 @@ def draw_fig12(df, ouput_prefix):
     for seqlen in seqlen_range[:len(ax.get_xticklabels())]:
         x_index = seqlen_range.index(seqlen)
         for hue in HUE_ORDER:
-            if len(fig12_df[(fig12_df["seqlen"] == seqlen) & (fig12_df["framework"] == hue)]) == 0:
+            if len(fig13_df[(fig13_df["seqlen"] == seqlen) & (fig13_df["framework"] == hue)]) == 0:
                 add_cross_at(ax, x_index, hue, y_offset=y_offset, size=size)
 
     unique_patch_colors = []
@@ -94,15 +94,15 @@ def draw_fig12(df, ouput_prefix):
 
     plt.savefig(ouput_prefix + f".pdf", bbox_inches='tight')
 
-def draw_fig13(df, ouput_prefix):
-    # Fig 13: fix sequence length, vary global batch size
-    fig13_df = df[(df['seqlen'] == FIG13_SEQLEN)]
-    gbs_range = sorted(fig13_df["global_batch_size"].unique())
+def draw_fig14(df, ouput_prefix):
+    # Fig 14: fix sequence length, vary global batch size
+    fig14_df = df[(df['seqlen'] == FIG14_SEQLEN)]
+    gbs_range = sorted(fig14_df["global_batch_size"].unique())
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
 
     # ax.set_title(f'Max Sequence Length: {gbs_range_seqlen}')
-    sns.barplot(x='global_batch_size', y='throughput', hue='framework', data=fig13_df, ax=ax, orient='v', hue_order=HUE_ORDER)
+    sns.barplot(x='global_batch_size', y='throughput', hue='framework', data=fig14_df, ax=ax, orient='v', hue_order=HUE_ORDER)
 
     # draw crosses for missing data
     y_offset = ax.get_ylim()[1] * 0.04
@@ -110,7 +110,7 @@ def draw_fig13(df, ouput_prefix):
     for gbs in gbs_range:
         x_index = gbs_range.index(gbs)
         for hue in HUE_ORDER:
-            if len(fig13_df[(fig13_df["global_batch_size"] == gbs) & (fig13_df["framework"] == hue)]) == 0:
+            if len(fig14_df[(fig14_df["global_batch_size"] == gbs) & (fig14_df["framework"] == hue)]) == 0:
                 add_cross_at(ax, x_index, hue, y_offset=y_offset, size=size)
 
     unique_patch_colors = []
@@ -147,7 +147,7 @@ FIG_INDEX_DICT = {
 for cluster in CLUSTERS:
     for model in MODELS:
         filtered_df = df[(df["cluster"] == cluster) & (df["model"] == model)]
-        fig12_out_prefix = os.path.join(args.out_dir, "fig12_" + FIG_INDEX_DICT[(model, cluster)])
-        draw_fig12(filtered_df, fig12_out_prefix)
         fig13_out_prefix = os.path.join(args.out_dir, "fig13_" + FIG_INDEX_DICT[(model, cluster)])
         draw_fig13(filtered_df, fig13_out_prefix)
+        fig14_out_prefix = os.path.join(args.out_dir, "fig14_" + FIG_INDEX_DICT[(model, cluster)])
+        draw_fig14(filtered_df, fig14_out_prefix)

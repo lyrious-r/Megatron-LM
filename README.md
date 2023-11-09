@@ -1,6 +1,6 @@
 ## Artifact for DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines
 
-This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of DynaPipe can be found at [DynaPipe](https://github.com/chenyu-jiang/EuroSys24-AE-Spring-92).
+This repository contains the artifact for reproducing the experiments in the paper `DynaPipe: Optimizing Multi-task Training through Dynamic Pipelines`. The main implementation of the paper can be found [here](https://github.com/awslabs/optimizing-multitask-training-through-dynamic-pipelines).
 
 This repository is based on a fork of [Megatron-LM](https://github.com/NVIDIA/Megatron-LM). Main modifications include adding support for packing in the dataloader, implementing the pipeline instructions for DynaPipe, and adding the scripts for running the experiments.
 
@@ -77,7 +77,7 @@ Please use the Dockerfile to setup the environment.
 
 Main software dependencies include:
 * PyTorch (>= 2.1.0)
-* [DynaPipe](https://github.com/chenyu-jiang/EuroSys24-AE-Spring-92)
+* [DynaPipe](https://github.com/awslabs/optimizing-multitask-training-through-dynamic-pipelines)
 * Megatron-LM (this repo)
 * A slightly modified version of DeepSpeed: [https://github.com/chenyu-jiang/DeepSpeed](https://github.com/chenyu-jiang/DeepSpeed). We removed a timer that introduce unnecessary synchronization which disrupts our schedule and disabled overflow checking for more consistent throughput measurement.
 
@@ -91,7 +91,7 @@ git clone https://github.com/chenyu-jiang/Megatron-LM.git
 cd Megatron-LM/docker
 ./build_image.sh
 ```
-(Note: for artifact evaluation, the provided machine already contain a pre-built image.)
+(Note: for artifact evaluation, the provided machine already contain a pre-built image. The pre-built image can also be found at [Zenodo](https://zenodo.org/records/8413925))
 
 To create a container, run (inside the docker directory):
 ```bash
@@ -171,28 +171,28 @@ mv ./experiment_configs/control_configs ./experiment_configs/control_configs_bac
 
 The script will perform all needed profiling, generate the best and controlled config for each setting and dump results in the corresponding directories.
 
-### Fig.12 and Fig.13
-Fig.12 and Fig.13 uses best/control configs (obtained by the grid search) to run full benchmarks for throughput comparison. Note for artifact evaluation, only Fig.12 (a)(b)(e)(f) and Fig.13 (a)(b)(e)(f) can be generated on a single p4d node. The other figures require multiple p4d nodes.
+### Fig.13 and Fig.14
+Fig.13 and Fig.14 uses best/control configs (obtained by the grid search) to run full benchmarks for throughput comparison. Note for artifact evaluation, only Fig.13 (a)(b)(e)(f) and Fig.14 (a)(b)(e)(f) can be generated on a single p4d node. The other figures require multiple p4d nodes.
 
 To run the experiments, run:
 ```bash
 ./experiment_scripts/run_benchmark.sh
 ```
-The benchmarking takes about 18 hours to complete. This will generate `best_throughput.jsonl` and `controlled_baseline.jsonl` containing the throughput results in `experiments` directory. To regenerate figure 12 and figure 13, run:
+The benchmarking takes about 18 hours to complete. This will generate `best_throughput.jsonl` and `controlled_baseline.jsonl` containing the throughput results in `experiments` directory. To regenerate figure 13 and figure 14, run:
 ```bash
-./experiment_scripts/generate_figure_12_13.sh
+./experiment_scripts/generate_figure_13_14.sh
 ```
 
 The generated figures will be in the `reproduced_figures` directory.
 
-### Fig.14
-Fig.14 compares the batching efficiency of DynaPipe and baseline. Such statistics are collected during the benchmarking process. To generate the figure, run:
+### Fig.15
+Fig.15 compares the batching efficiency of DynaPipe and baseline. Such statistics are collected during the benchmarking process. To generate the figure, run:
 ```bash
-./experiment_scripts/generate_figure_14.sh
+./experiment_scripts/generate_figure_15.sh
 ```
 
-### Fig.15
-Fig.15 performs ablation study on our micro-batch partitioning and scheduling algorithms. The config files for ablation experiments are located in `experiment_configs/ablation_configs`. To run the experiments, run:
+### Fig.16
+Fig.16 performs ablation study on our micro-batch partitioning and scheduling algorithms. The config files for ablation experiments are located in `experiment_configs/ablation_configs`. To run the experiments, run:
 ```bash
 ./experiment_scripts/run_ablation.sh
 ```
@@ -200,19 +200,19 @@ The ablation experiments takes about 8 hours to complete. Results will be saved 
 
 To generate the figure, run:
 ```bash
-./experiment_scripts/generate_figure_15.sh
+./experiment_scripts/generate_figure_16.sh
 ```
 
-### Fig.16
-Fig.16 shows the execution time for DynaPipe. The statistics are also collected during the benchmarking process when reproducing Fig.12 and 13. To generate the figure, run:
+### Fig.17
+Fig.17 shows the execution time for DynaPipe. Note that only Fig.17 (a) will be generated. The statistics are also collected during the benchmarking process when reproducing Fig.13 and 14. To generate the figure, run:
 ```bash
-./experiment_scripts/generate_figure_16.sh
+./experiment_scripts/generate_figure_17.sh
 ```
 (Note: since we did not run benchmark on more than 1 p4d nodes, the planning time distribution in the generated figure is expected to be slightly different from the original paper.)
 
-### Fig.17
-Fig.17 shows the prediction accuracy of DynaPipe's cost models. The memory and iteration time data is collected through the benchmark, which are compared against the predictions. To generate the figure, run:
+### Fig.18
+Fig.18 shows the prediction accuracy of DynaPipe's cost models. The memory and iteration time data is collected through the benchmark, which are compared against the predictions. To generate the figure, run:
 ```bash
-./experiment_scripts/generate_figure_17.sh
+./experiment_scripts/generate_figure_18.sh
 ```
 

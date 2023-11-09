@@ -81,7 +81,7 @@ RUN python3 -m pip install scikit-build
 
 # install DynaPipe
 RUN cd $HOME \
-    && git clone https://github.com/chenyu-jiang/DynaPipe.git \
+    && git clone https://github.com/awslabs/optimizing-multitask-training-through-dynamic-pipelines DynaPipe \
     && cd DynaPipe/ \
     && pip3 install -r requirements.txt \
     && pip3 install -e .
@@ -93,7 +93,7 @@ RUN cd $HOME/DynaPipe \
     && cd ../memory_opt \
     && python3 setup.py build
 
-# Clone Megetron-LM and install apex
+# Clone Megetron-LM
 RUN cd $HOME \
     && git clone -b dynapipe https://github.com/chenyu-jiang/Megatron-LM
 
