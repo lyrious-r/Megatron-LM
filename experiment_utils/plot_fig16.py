@@ -78,7 +78,7 @@ scheduling_df = df[df["Exp Type"] == "Schedule"].copy()
 batching_df["Type"] = batching_df.apply(parse_batching_ablation_type, axis=1)
 scheduling_df["Type"] = scheduling_df.apply(parse_schedule_ablation_type, axis=1)
 
-# preprocessing for fig15a
+# preprocessing for fig16a
 # select the best result from grid search
 def is_grid(row):
     return "grid" in row["exp_name"]
@@ -93,8 +93,8 @@ batching_df = pd.concat([batching_grid_df, batching_non_grid_df], ignore_index=T
 
 batching_df["Type"] = pd.Categorical(batching_df["Type"], ["MLM\n+DS", "TB (S)", "TB (T)", "DP (S)", "DP (T)"])
 
-# preprocessing for fig15b
-scheduling_df["Type"] = pd.Categorical(scheduling_df["Type"], ["1F1B", "Cyclic\n(no reorder)", "Cyclic"], ordered=True)
+# preprocessing for fig16b
+scheduling_df["Type"] = pd.Categorical(scheduling_df["Type"], ["1F1B", "Adaptive\n(no reorder)", "Adaptive"], ordered=True)
 scheduling_df["Global Batch Size"] = scheduling_df["global_batch_size"]
 # transform throughput -> speedup (normalized by the slowest)
 scheduling_df["throughput"] = scheduling_df.groupby('Global Batch Size')["throughput"].transform(lambda x: (x / x.min()))
