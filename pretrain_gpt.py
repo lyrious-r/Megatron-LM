@@ -81,7 +81,7 @@ def loss_func(loss_mask, output_tensor):
         return loss, {'lm loss': loss}
 
 
-def forward_step(data_iterator, model):
+def forward_step(data_iterator, model, recompute_policy=None):
     """Forward step."""
     args = get_args()
     timers = get_timers()
@@ -93,7 +93,7 @@ def forward_step(data_iterator, model):
     timers('batch-generator').stop()
 
     output_tensor = model(tokens, position_ids, attention_mask,
-                          labels=labels)
+                          labels=labels,recompute_policy=recompute_policy)
 
     return output_tensor, partial(loss_func, loss_mask)
 

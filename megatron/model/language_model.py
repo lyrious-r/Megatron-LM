@@ -423,7 +423,7 @@ class TransformerLanguageModel(MegatronModule):
                 enc_dec_attn_mask=None, tokentype_ids=None,
                 inference_params=None,
                 pooling_sequence_index=0,
-                enc_hidden_states=None, output_enc_hidden=False):
+                enc_hidden_states=None, output_enc_hidden=False, recompute_policy=None):
 
         # Encoder embedding.
         if self.pre_process:
@@ -445,7 +445,7 @@ class TransformerLanguageModel(MegatronModule):
                 encoder_output = self.encoder(
                     encoder_input,
                     enc_attn_mask,
-                    inference_params=inference_params)
+                    inference_params=inference_params,recompute_policy=recompute_policy)
             else:
                 encoder_output = self.encoder_hidden_state
         else:
@@ -493,7 +493,7 @@ class TransformerLanguageModel(MegatronModule):
             dec_attn_mask,
             encoder_output=encoder_output,
             enc_dec_attn_mask=enc_dec_attn_mask,
-            inference_params=inference_params)
+            inference_params=inference_params,recompute_policy=recompute_policy)
 
         if self.add_pooler and self.post_process:
             return decoder_output, encoder_output, pooled_output

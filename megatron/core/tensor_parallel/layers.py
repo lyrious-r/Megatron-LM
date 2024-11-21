@@ -572,7 +572,7 @@ class ColumnParallelLinear(torch.nn.Module):
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
 
-
+    
 class RowParallelLinear(torch.nn.Module):
     """Linear layer with row parallelism.
 

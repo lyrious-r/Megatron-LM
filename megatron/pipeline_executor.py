@@ -140,6 +140,8 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
     def _handle_forward(exec: PipelineExecutor, instr: ForwardPass):
         # set recompute flag
         flag = recompute_level_to_flag(exec.execution_plan.recompute_method)
+        #execution_plan 结构\instr
+        recompute_policy = instr.recompute_policy
         mpu.set_recomputation_level(flag)
         if args.virtual_pipeline_model_parallel_size is not None:
             # interleaved scheduling
@@ -188,7 +190,7 @@ def _create_forward_handler(forward_step_func, data_iterators, models):
         exec.input_tensors[key] = input_tensor
         if not hasattr(exec, "forward_data_store"):
             exec.forward_data_store = []
-        outputs = forward_step(forward_step_func, data_iterator, model, input_tensor, exec.forward_data_store, fwd_bwd_timers, collect_non_loss_data=False)
+        outputs = forward_step(forward_step_func, data_iterator, model, input_tensor, exec.forward_data_store, fwd_bwd_timers, collect_non_loss_data=False,recompute_policy = recompute_policy)
         # output_tensors saves the output tensor and a flag indicating
         # whether the tensor should be freed after communication
         # the order of output_tensors follows Megatron-LM

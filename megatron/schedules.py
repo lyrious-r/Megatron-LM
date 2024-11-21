@@ -124,7 +124,8 @@ def forward_step(forward_step_func,
                  input_tensor,
                  forward_data_store,
                  timers,
-                 collect_non_loss_data=False):
+                 collect_non_loss_data=False,
+                 recompute_policy=None):
     """Forward step for passed-in model.
 
     If first stage, input tensor is obtained from data_iterator, otherwise
@@ -149,7 +150,7 @@ def forward_step(forward_step_func,
         unwrap_output_tensor = True
 
     unwrapped_model.set_input_tensor(input_tensor)
-    output_tensor, loss_func = forward_step_func(data_iterator, model)
+    output_tensor, loss_func = forward_step_func(data_iterator, model,recompute_policy=recompute_policy)
     if mpu.is_pipeline_last_stage():
         if not collect_non_loss_data:
             output_tensor = loss_func(output_tensor)

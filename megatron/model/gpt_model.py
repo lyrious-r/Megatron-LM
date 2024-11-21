@@ -78,13 +78,14 @@ class GPTModel(MegatronModule):
         self.language_model.set_input_tensor(input_tensor)
 
     def forward(self, input_ids, position_ids, attention_mask, labels=None,
-                tokentype_ids=None, inference_params=None):
+                tokentype_ids=None, inference_params=None,recompute_policy=None):
 
         lm_output = self.language_model(
             input_ids,
             position_ids,
             attention_mask,
-            inference_params=inference_params)
+            inference_params=inference_params,
+            recompute_policy=recompute_policy)
 
         if self.post_process:
             return post_language_model_processing(
