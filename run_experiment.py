@@ -404,6 +404,8 @@ def _add_training_args(parser):
         choices=[0, 1, 2, 3],
         help="Which stage of ZeRO to use.",
     )
+    group.add_argument('--td_rc',type=bool,
+        default=True, help='use 2d rc')
     return parser, group
 
 

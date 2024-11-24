@@ -118,7 +118,7 @@ def pretrain(train_valid_test_dataset_provider,
 
     args = get_args()
     timers = get_timers()
-
+    args = get_args()
     if DEBUG_DUMP_MEMORY_STATS and not args.dynapipe_custom_allocator:
         torch.cuda.memory._record_memory_history(True, trace_alloc_record_context=True, record_context_cpp=True)
 

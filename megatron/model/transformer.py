@@ -865,7 +865,7 @@ class ParallelTransformerLayer_DRC(MegatronModule):
                  drop_path_rate=0.):
         args = get_args()
 
-        super(ParallelTransformerLayer, self).__init__()
+        super(ParallelTransformerLayer_DRC, self).__init__()
         self.layer_number = layer_number
         self.layer_type = layer_type
 
@@ -944,8 +944,6 @@ class ParallelTransformerLayer_DRC(MegatronModule):
             init_method=output_layer_init_method,
             skip_bias_add=True,
             **_args_to_kwargs())
-        
-        self.compute_unit.append(self.dense)
 
 
         self.hidden_dropout = args.hidden_dropout
@@ -1012,6 +1010,12 @@ class ParallelTransformerLayer_DRC(MegatronModule):
         self.bias_dropout_add_exec_handler = \
                 nullcontext if use_nvfuser else torch.enable_grad
 
+    def _checkpoint_core_attention(self):
+        recompute_level = mpu.get_recomputation_level()
+        if recompute_level == "selective":
+            return True
+        return False
+    
     def forward(self, hidden_states, attention_mask,
                 encoder_output=None, enc_dec_attn_mask=None,
                 inference_params=None,recompute_policy=None):
@@ -1136,7 +1140,11 @@ class ParallelTransformerLayer_DRC(MegatronModule):
 
         def attention_dense_unit(context_layer):
             output, bias = self.dense(context_layer)
-
+            return (output, bias)
+        
+        def first_residual_unit(dense_out):
+            output, bias = dense_out
+            global residual
             if self.drop_path is None:
                 global bias_dropout_add_func
                 # jit scripting for a nn.module (with dropout) is not
@@ -1164,7 +1172,7 @@ class ParallelTransformerLayer_DRC(MegatronModule):
                 layernorm_input = residual + self.drop_path(out)
             return layernorm_input
     
-        def post_attention_layernorm_unit(self, layernorm_input):
+        def post_attention_layernorm_unit(layernorm_input):
             global residual
             # Layer norm post the self attention.
             layernorm_output = self.post_attention_layernorm(layernorm_input)
@@ -1175,6 +1183,9 @@ class ParallelTransformerLayer_DRC(MegatronModule):
             return layernorm_output
 
         def inter_attention_unit(layernorm_output):
+            if not self.layer_type == LayerType.decoder:
+                return layernorm_output
+            global residual
             attention_output, attention_bias = \
                 self.inter_attention(layernorm_output,
                                      enc_dec_attn_mask,
@@ -1195,7 +1206,6 @@ class ParallelTransformerLayer_DRC(MegatronModule):
             # Layer norm post the decoder attention
             layernorm_output = self.post_inter_attention_layernorm(layernorm_input)
 
-            global residual
             # Second residual connection.
             if self.apply_residual_connection_post_layernorm:
                 residual = layernorm_output
@@ -1218,9 +1228,14 @@ class ParallelTransformerLayer_DRC(MegatronModule):
             return intermediate_parallel
         
         def mlp_4h_to_h_unit(intermediate_parallel):
+
             # [s, b, h]
             mlp_output, mlp_bias = self.dense_4h_to_h(intermediate_parallel)
-
+            return  (mlp_output, mlp_bias)
+        
+        def second_residual_unit(mlp_out):
+            mlp_output, mlp_bias = mlp_out
+            global residual
             if self.drop_path is None:
                 with self.bias_dropout_add_exec_handler():
                     output = bias_dropout_add_func(
@@ -1247,7 +1262,7 @@ class ParallelTransformerLayer_DRC(MegatronModule):
 
             return output
         
-        compute_unit = [layernorm_unit, qkv_unit, attention_unit, attention_dense_unit, post_attention_layernorm_unit, inter_attention_unit, mlp_h_to_4h_unit, mlp_4h_to_h_unit]
+        compute_unit = [layernorm_unit, qkv_unit, attention_unit, attention_dense_unit, first_residual_unit, post_attention_layernorm_unit, inter_attention_unit, mlp_h_to_4h_unit, mlp_4h_to_h_unit,second_residual_unit]
         
 
         def custom(start, end, is_transformer_engine=False):
@@ -1258,13 +1273,21 @@ class ParallelTransformerLayer_DRC(MegatronModule):
                     x_ = unit(x_)
                 return x_
             
+            # def custom_forward(*args, **kwargs):
+            #     for index in range(start, end):
+            #         unit = compute_unit[index]
+            #         x_ = unit(*args, **kwargs)
+            #     return x_
+            
             if not is_transformer_engine:
                 return custom_forward
             
 
         if recompute_policy == None:
-            recompute_policy = [True]*len(compute_unit)
+            recompute_policy = [True, True, True, False, True, True, True, True, True, True]
         
+        recompute_policy[4] = False
+        recompute_policy[9] = False
         i = 0
         while i < len(recompute_policy):
             if recompute_policy[i]:
@@ -1274,10 +1297,11 @@ class ParallelTransformerLayer_DRC(MegatronModule):
                 end = i
                 hidden_states = tensor_parallel.checkpoint(
                         custom(start, end),
-                        self.distribute_saved_activations,
+                        False,
                         hidden_states)
             else:
                 hidden_states = compute_unit[i](hidden_states)
+                i += 1
 
         return hidden_states
         # # Layer norm at the beginning of the transformer layer.
@@ -1527,7 +1551,7 @@ class ParallelTransformer(MegatronModule):
         # Transformer layers.
         def build_layer(layer_number):
             if args.transformer_impl == 'local':
-                if args.use_drc:
+                if args.td_rc:
                     return ParallelTransformerLayer_DRC(
                         init_method,
                         output_layer_init_method,
