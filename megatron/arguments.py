@@ -780,7 +780,7 @@ def _add_training_args(parser):
                        dest='gradient_accumulation_fusion')
     group.add_argument('--microbenchmark-save-dir', type=str, help='Path to save microbenchmark results')
     group.add_argument('--skip-iters', type=int, default=0, help='Number of iterations to skip')
-    group.add_argument('--td_rc', action='store_true', help='use 2d rc')
+    group.add_argument('--drc', action='store_true', help='use 2d rc')
     return parser
 
 

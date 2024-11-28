@@ -404,8 +404,7 @@ def _add_training_args(parser):
         choices=[0, 1, 2, 3],
         help="Which stage of ZeRO to use.",
     )
-    group.add_argument('--td_rc',type=bool,
-        default=True, help='use 2d rc')
+    group.add_argument('--drc', action='store_true', help='use 2d rc')
     return parser, group
 
 
@@ -1638,6 +1637,10 @@ def _get_shell_script(args):
     elif args.recompute_level == "full":
         recompute_args = (
             "--recompute-granularity full --recompute-method uniform"
+        )
+    elif args.recompute_level == "batch_dynamic":
+        recompute_args = (
+            "--recompute-granularity batch_dynamic --recompute-method uniform"
         )
     else:
         assert (
