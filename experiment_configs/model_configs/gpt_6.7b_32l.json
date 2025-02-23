@@ -1,5 +1,5 @@
 {
-    "num_layers": 32,
+    "num_layers": 64,
     "hidden_size": 4096,
     "num_attn_heads": 32,
     "kv_channels": 128,

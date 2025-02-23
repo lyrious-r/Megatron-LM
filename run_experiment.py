@@ -397,6 +397,9 @@ def _add_training_args(parser):
         default=False,
         help="Run model using deepspeed.",
     )
+    group.add_argument('--report-every-iteration', action='store_true', help='report memory usage every iteration')
+    group.add_argument('--use-gmlake', action='store_true', help='use gmlake memory allocator')
+    group.add_argument('--drc', action='store_true', help='use 2d rc')
     group.add_argument(
         "--deepspeed_zero_stage",
         type=int,
@@ -404,8 +407,6 @@ def _add_training_args(parser):
         choices=[0, 1, 2, 3],
         help="Which stage of ZeRO to use.",
     )
-    group.add_argument('--td_rc',type=bool,
-        default=True, help='use 2d rc')
     return parser, group
 
 
@@ -565,6 +566,12 @@ def _add_dynapipe_args(parser):
         "--dynapipe_limit_rc_type",
         type=str,
         help="Limit rc type.",
+    )
+    group.add_argument(
+        "--ban_decrease_memory_limit",
+        type=bool,
+        default=True,
+        help="ban decrease memory limit",
     )
     return parser, group
 
@@ -1252,7 +1259,7 @@ def run_grid_experiments(args):
             should_abort = current_status in ["abort", "restart"]
             should_restart = current_status == "restart"
             cleanup_dynapipe_job(args)
-            if not should_restart:
+            if not should_restart or args.ban_decrease_memory_limit:
                 break
             else:
                 # decrease memory limit and restart
@@ -1412,11 +1419,11 @@ def run_config(args):
                 current_status = current_status.decode()
             should_restart = current_status == "restart"
             cleanup_dynapipe_job(args)
-            if not should_restart:
+            if not should_restart or args.ban_decrease_memory_limit:
                 break
             else:
                 # decrease memory limit and restart
-                if current_args.dynapipe_device_memory_limit < 10000:
+                if current_args.dynapipe_device_memory_limit < 81000:
                     break
                 current_args.dynapipe_device_memory_limit -= 1000
                 print_fn("Restarting with lower memory limit: {}.".format(current_args.dynapipe_device_memory_limit))
@@ -1448,6 +1455,7 @@ def _parse_args():
         choices=["t5", "gpt"],
         help="Type of model to benchmark on.",
     )
+
     parser, cluster_group = _add_cluster_args(parser)
     parser, model_group = _add_model_args(parser)
     parser, data_group = _add_data_args(parser)
@@ -1666,12 +1674,13 @@ def _get_shell_script(args):
             "--dynapipe-prefetch-planner-num-workers "
             + f"{args.dynapipe_prefetch_planner_num_workers}",
             f"--dynapipe-zero-stage {args.deepspeed_zero_stage}",
-            "--dynapipe-reserve-all-memory",
-            "--dynapipe-custom-allocator",
             f"--dynapipe-partition-algo {args.dynapipe_partition_algo}",
             f"--dynapipe-token-based-partition-mbs {args.dynapipe_token_based_partition_mbs}",
             f"--dynapipe-schedule-method {args.dynapipe_schedule_method}",
         ]
+        if not args.use_gmlake:
+            dynapipe_args.append(f"--dynapipe-reserve-all-memory")
+            dynapipe_args.append(f"--dynapipe-custom-allocator")
         if args.dynapipe_disable_mb_permutation:
             dynapipe_args.append("--dynapipe-disable-mb-permutation")
         if args.dynapipe_disable_scheduler_memory_limit:
@@ -1696,6 +1705,19 @@ def _get_shell_script(args):
             f"--deepspeed_config {args.deepspeed_config}",
         ]
         deepspeed_args = " ".join(deepspeed_args)
+
+    # construct drc_args
+    drc_args = []
+    if args.report_every_iteration:
+        drc_args.append(
+            f"--report-every-iteration"
+        )
+    if args.drc:
+        drc_args.append(
+            f"--drc"
+        )
+    drc_args = " ".join(drc_args)
+
     template_args = vars(args)
     template_args.update(
         {
@@ -1704,10 +1726,12 @@ def _get_shell_script(args):
             "batching_args": batching_args,
             "dynapipe_args": dynapipe_args,
             "deepspeed_args": deepspeed_args,
+            "drc_args": drc_args,
         }
     )
+    
     with open(TEMPLATE_PATH.format(args.model_type), "r") as f:
-        template = Template(f.read())
+        template = Template(f.read())   
     return template.substitute(template_args)
 
 

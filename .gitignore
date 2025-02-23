@@ -2,7 +2,6 @@ __pycache__
 .vscode
 .DS_Store
 *.txt
-*.sh
 *.idx
 *.bin
 *.npy

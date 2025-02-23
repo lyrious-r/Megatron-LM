@@ -61,5 +61,5 @@ python -m torch.distributed.launch $$DISTRIBUTED_ARGS \
        --vocab-extra-ids 100 \
        --num-workers 0 \
        --dataloader-type ordered \
-       ${pipeline_args} ${recompute_args} ${batching_args} ${dynapipe_args} ${deepspeed_args} \
+       ${drc_args} ${pipeline_args} ${recompute_args} ${batching_args} ${dynapipe_args} ${deepspeed_args} \
        2>&1 | tee ${stdout_stderr_log}

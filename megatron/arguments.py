@@ -733,9 +733,6 @@ def _add_training_args(parser):
     group.add_argument('--use-flash-attn', action='store_true',
                        help='use FlashAttention implementation of attention. '
                        'https://arxiv.org/abs/2205.14135')
-    ###
-    group.add_argument('--use-drc', type=bool , default=False,
-                    help='Use DRC for training')
     group.add_argument('--optimizer', type=str, default='adam',
                        choices=['adam', 'sgd'],
                        help='Optimizer function')
@@ -780,7 +777,8 @@ def _add_training_args(parser):
                        dest='gradient_accumulation_fusion')
     group.add_argument('--microbenchmark-save-dir', type=str, help='Path to save microbenchmark results')
     group.add_argument('--skip-iters', type=int, default=0, help='Number of iterations to skip')
-    group.add_argument('--td_rc', action='store_true', help='use 2d rc')
+    group.add_argument('--report-every-iteration', action='store_true', help='Number of iterations to skip')
+    group.add_argument('--drc', action='store_true', help='use 2d rc')
     return parser
 
 

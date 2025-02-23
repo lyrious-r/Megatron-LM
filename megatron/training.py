@@ -900,6 +900,10 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 iteration,
             )
 
+    if args.report_every_iteration:
+        report_memory('(after {} iterations)'.format(iteration))
+        report_memory_flag = True
+        
     if iteration % args.log_interval == 0:
         elapsed_time = timers('interval-time').elapsed(barrier=True)
         elapsed_time_per_iteration = elapsed_time / total_iterations
