@@ -34,6 +34,9 @@ KVREDIS_POLLING_INTERVAL = 0.5
 
 print_fn = print
 
+def list_of_ints(arg):
+	return list(map(int, arg.split(',')))
+
 # redis client to track experiment progress between different nodes
 class RedisKVStore(object):
     # a blocking local redis client
@@ -400,6 +403,8 @@ def _add_training_args(parser):
     group.add_argument('--report-every-iteration', action='store_true', help='report memory usage every iteration')
     group.add_argument('--use-gmlake', action='store_true', help='use gmlake memory allocator')
     group.add_argument('--drc', action='store_true', help='use 2d rc')
+    group.add_argument('--adalayer', action='store_true', help='use adaptive pipeline')
+    group.add_argument('--layers-per-rank', type=str, help='layers per rank')
     group.add_argument(
         "--deepspeed_zero_stage",
         type=int,
@@ -1715,6 +1720,11 @@ def _get_shell_script(args):
     if args.drc:
         drc_args.append(
             f"--drc"
+        )
+    if args.adalayer:
+        drc_args.append(f"--adalayer")
+        drc_args.append(
+            f"--layers-per-rank {args.layers_per_rank}"
         )
     drc_args = " ".join(drc_args)
 

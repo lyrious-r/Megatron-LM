@@ -9,6 +9,9 @@ import torch
 import deepspeed
 from dynapipe.pipe.instructions import get_available_rc_types
 
+def list_of_ints(arg):
+	return list(map(int, arg.split(',')))
+
 def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     """Parse all arguments."""
     parser = argparse.ArgumentParser(description='Megatron-LM Arguments',
@@ -779,6 +782,9 @@ def _add_training_args(parser):
     group.add_argument('--skip-iters', type=int, default=0, help='Number of iterations to skip')
     group.add_argument('--report-every-iteration', action='store_true', help='Number of iterations to skip')
     group.add_argument('--drc', action='store_true', help='use 2d rc')
+    group.add_argument('--adalayer', action='store_true', help='use adaptive pipeline')
+    group.add_argument('--layers-per-rank', type=list_of_ints, help='layers per rank')
+
     return parser
 
 

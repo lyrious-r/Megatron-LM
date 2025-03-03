@@ -932,6 +932,9 @@ def _get_num_layers(args, is_encoder_and_decoder_model, is_decoder=False):
             num_layers = args.encoder_num_layers
         else:
             num_layers = args.decoder_num_layers
+
+    if args.adalayer:
+        num_layers = args.layers_per_rank[mpu.get_pipeline_model_parallel_rank()]
     return num_layers
 
 
