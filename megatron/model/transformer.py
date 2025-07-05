@@ -883,6 +883,13 @@ class NoopTransformerLayer(MegatronModule):
 
 def _get_num_layers(args, is_encoder_and_decoder_model, is_decoder=False):
     """Compute the number of transformer layers resident on the current rank."""
+    if args.adalayer and args.use_dynapipe:
+        rank = mpu.get_pipeline_model_parallel_rank()
+        num_layers = 0
+        for i in range(len(args.dynapipe_layer_to_device)):
+            if args.dynapipe_layer_to_device[i] == rank:
+                num_layers += 1
+        return num_layers
     if mpu.get_pipeline_model_parallel_world_size() > 1:
         if is_encoder_and_decoder_model and args.virtual_pipeline_model_parallel_size is None:
             assert args.pipeline_model_parallel_split_rank is not None
@@ -933,8 +940,6 @@ def _get_num_layers(args, is_encoder_and_decoder_model, is_decoder=False):
         else:
             num_layers = args.decoder_num_layers
 
-    if args.adalayer:
-        num_layers = args.layers_per_rank[mpu.get_pipeline_model_parallel_rank()]
     return num_layers
 
 

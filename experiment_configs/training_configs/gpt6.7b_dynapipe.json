@@ -5,6 +5,7 @@
     "dynapipe_prefetch_planner_num_workers": 64,
     "train_iters": 40,
     "drc": true,
-    "report_every_iteration":true
+    "report_every_iteration":true,
+    "adalayer": true
 
 }
