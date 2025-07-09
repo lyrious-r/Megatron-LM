@@ -568,6 +568,12 @@ def _add_dynapipe_args(parser):
         help="Disable tsp.",
     )
     group.add_argument(
+        "--dynapipe_fast_mode",
+        type=bool,
+        default=False,
+        help="enable fast mode.",
+    )
+    group.add_argument(
         "--dynapipe_limit_rc_type",
         type=str,
         help="Limit rc type.",
@@ -1692,6 +1698,8 @@ def _get_shell_script(args):
             dynapipe_args.append("--dynapipe-disable-scheduler-memory-limit")
         if args.dynapipe_disable_tsp:
             dynapipe_args.append("--dynapipe-disable-tsp")
+        if args.dynapipe_fast_mode:
+            dynapipe_args.append("--dynapipe-fast-mode")
         if args.model_type == "gpt":
             dynapipe_args.append("--dynapipe-seqlen-offset 1")
         if args.dynapipe_enable_packing:

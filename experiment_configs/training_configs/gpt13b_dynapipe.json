@@ -3,5 +3,9 @@
     "dynapipe_cost_model": "./cost_models/gpt_13b_cm.pkl",
     "dynapipe_device_memory_limit": 36000,
     "dynapipe_prefetch_planner_num_workers": 64,
-    "train_iters": 40
+    "train_iters": 40,
+    "drc": true,
+    "report_every_iteration":true,
+    "adalayer": true,
+    "dynapipe_fast_mode": true
 }
